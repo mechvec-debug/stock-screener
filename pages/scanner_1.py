@@ -32,9 +32,16 @@ def get_market_rollover_key():
 # =========================================
 # GOOGLE SHEETS READ/WRITE FUNCTIONS
 # =========================================
+def get_google_client():
+    """Smart auth: uses Secrets on the cloud, and JSON file on your computer."""
+    if "gcp_service_account" in st.secrets:
+        return gspread.service_account_from_dict(dict(st.secrets["gcp_service_account"]))
+    else:
+        return gspread.service_account(filename="data/google_credentials.json")
+
 def get_tickers_from_sheet():
     try:
-        gc = gspread.service_account(filename="data/google_credentials.json")
+        gc = get_google_client()
         sh = gc.open("Stock_List")
         worksheet = sh.worksheet("Fundamentals")
         tickers = worksheet.col_values(1)[1:]
@@ -43,10 +50,9 @@ def get_tickers_from_sheet():
         print(f"❌ Failed to read Google Sheet: {e}")
         return []
 
-
 def update_google_sheet(dataframe):
     try:
-        gc = gspread.service_account(filename="data/google_credentials.json")
+        gc = get_google_client()
         sh = gc.open("Stock_List")
         worksheet = sh.worksheet("Fundamentals")
         worksheet.batch_clear(["A2:M1000"])
@@ -55,7 +61,6 @@ def update_google_sheet(dataframe):
     except Exception as e:
         print(f"❌ Failed to update Google Sheet: {e}")
         return False
-
 
 # =========================================
 # FETCH STOCK DATA

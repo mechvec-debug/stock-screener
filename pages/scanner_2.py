@@ -37,13 +37,19 @@ current_market_key = get_market_rollover_key()
 st.write(f"Data locked for trading day: {current_market_key}")
 
 
-# =========================
+# =========================================
 # GOOGLE SHEETS CONNECTION
-# =========================
+# =========================================
+def get_google_client():
+    if "gcp_service_account" in st.secrets:
+        return gspread.service_account_from_dict(dict(st.secrets["gcp_service_account"]))
+    else:
+        return gspread.service_account(filename="data/google_credentials.json")
+
 @st.cache_data(show_spinner=False)
 def get_tickers_from_sheet(cache_key):
     try:
-        gc = gspread.service_account(filename="data/google_credentials.json")
+        gc = get_google_client()
         sh = gc.open("Stock_List")
         worksheet = sh.worksheet("Fundamentals")
         tickers = worksheet.col_values(1)[1:]
@@ -51,7 +57,6 @@ def get_tickers_from_sheet(cache_key):
     except Exception as e:
         st.error(f"❌ Failed to read Google Sheet: {e}")
         return []
-
 
 # =========================
 # SMART CACHING ENGINE
