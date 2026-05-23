@@ -136,7 +136,7 @@ def fundamentals_pass(info):
         roe = float(info.get("ROE", 0))
         debt_to_equity = float(info.get("Debt/Equity", 999))
 
-        return all([market_cap > 1000, sales_growth > 5, opm > 10, roe > 10, debt_to_equity < 1.5])
+        return all([market_cap > 1000, sales_growth > 5, opm > 10, roe > 8, debt_to_equity < 1.5])
     except:
         return False
 
