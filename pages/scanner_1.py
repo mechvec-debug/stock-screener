@@ -156,9 +156,9 @@ def get_status(data):
         rsi_increasing = latest["RSI_Slope"] > 0
 
         if fundamentals_ok:
-            if 0.30 <= price_ratio <= 0.50:
+            if 0.30 <= price_ratio <= 0.45:
                 status = "🚀 STRONG BUY" if (vol_buildup and rsi_increasing) else "🔥 PASS"
-            elif 0.70 <= price_ratio < 0.90:
+            elif 0.70 <= price_ratio < 0.80:
                 status = "👀 WATCH"
             else:
                 status = "WAIT (Price)"
