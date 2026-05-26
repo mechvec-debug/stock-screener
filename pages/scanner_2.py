@@ -65,11 +65,8 @@ def get_tickers_from_sheet(cache_key):
 def fetch_raw_stock_data(ticker, cache_key):
     try:
         yf_ticker = f"{ticker}.NS" if not ticker.endswith(".NS") else ticker
-
-        # FIX 1: Try .NS FIRST to prevent the Yahoo Finance "delisted" terminal spam
         df = get_price_data(yf_ticker)
 
-        # Ultimate live fallback if the custom fetcher fails
         if df is None or df.empty or len(df) < 60:
             df = yf.Ticker(yf_ticker).history(period="1y")
 
@@ -91,8 +88,10 @@ def get_benchmark_return(cache_key):
             nifty_df = yf.Ticker("^NSEI").history(period="1y")
 
         nifty_close = nifty_df["Close"].squeeze()
-        nifty_return = ((nifty_close.iloc[-1] - nifty_close.iloc[-20]) / nifty_close.iloc[-20]) * 100
-        return nifty_return
+        if len(nifty_close) > 20:
+            nifty_return = ((nifty_close.iloc[-1] - nifty_close.iloc[-20]) / nifty_close.iloc[-20]) * 100
+            return nifty_return
+        return 0
     except:
         return 0
 
@@ -137,7 +136,7 @@ with st.spinner("Loading End-of-Day market data..."):
     for stock in tickers:
         df, info = fetch_raw_stock_data(stock, current_market_key)
         if df is not None:
-            cached_market_data[stock] = {"df": df.copy(), "info": info}
+            cached_market_data[stock] = {"df": df.copy(), "info": info or {}}
 
 # =========================
 # STOCK SCAN LOOP
@@ -147,48 +146,57 @@ with st.spinner("Running calculations..."):
         for volume_value in volume_test_values:
             for stock, data in cached_market_data.items():
                 try:
-                    df = data["df"]
+                    df = data["df"].copy()
                     info = data["info"]
 
-                    # FIX 2: Use "or 0" / "or 999" to catch explicit 'None' values from Yahoo
-                    # Finance and prevent Arrow Serialization crashes in Streamlit
-                    market_cap = info.get("marketCap") or 0
-                    roe = info.get("returnOnEquity") or 0
-                    profit_margin = info.get("profitMargins") or 0
-                    revenue_growth = info.get("revenueGrowth") or 0
-                    debt_to_equity = info.get("debtToEquity") or 999
-                    pe_ratio = info.get("trailingPE") or 999
+                    # Fundamentals with graceful fallback. 
+                    # If Yahoo fails to fetch, we don't drop the stock purely due to missing data.
+                    market_cap = float(info.get("marketCap") or 0)
+                    roe = float(info.get("returnOnEquity") or 0)
+                    profit_margin = float(info.get("profitMargins") or 0)
+                    revenue_growth = float(info.get("revenueGrowth") or 0)
+                    debt_to_equity = float(info.get("debtToEquity") or 0)
+                    pe_ratio = float(info.get("trailingPE") or 0)
 
-                    if not (
-                            market_cap > 50000000000 and roe > 0.15 and profit_margin > 0.10 and revenue_growth > 0 and debt_to_equity < 1 and pe_ratio < 50):
-                        continue
+                    # Only enforce conditions IF data was successfully fetched (market_cap > 0)
+                    if market_cap > 0:
+                        if not (market_cap > 50000000000 and roe > 0.15 and profit_margin > 0.10 and revenue_growth > 0 and debt_to_equity < 1 and pe_ratio < 50):
+                            continue
 
                     # Price & Indicators
-                    close_series = df["Close"].squeeze()
-                    volume_series = df["Volume"].squeeze()
-
-                    df["50DMA"] = close_series.rolling(50).mean()
-                    df["RSI"] = ta.momentum.RSIIndicator(close=close_series, window=14).rsi()
-                    df["AvgVolume"] = volume_series.rolling(20).mean()
-                    df["BreakoutHigh"] = close_series.rolling(breakout_days).max()
+                    df["50DMA"] = df["Close"].rolling(50).mean()
+                    df["RSI"] = ta.momentum.RSIIndicator(close=df["Close"], window=14).rsi()
+                    df["AvgVolume"] = df["Volume"].rolling(20).mean()
+                    df["BreakoutHigh"] = df["Close"].rolling(breakout_days).max()
                     df["DailyRange"] = ((df["High"] - df["Low"]) / df["Close"]) * 100
 
-                    latest = df.iloc[-1]
-                    close_price = latest["Close"].item()
-                    dma50 = latest["50DMA"].item()
-                    rsi = latest["RSI"].item()
-                    current_volume = latest["Volume"].item()
-                    avg_volume = latest["AvgVolume"].item()
-                    breakout_level = df["BreakoutHigh"].iloc[-2].item()
+                    # CRITICAL FIX: Drop NaNs to prevent toxic math conditions later
+                    df_clean = df.dropna(subset=["50DMA", "RSI", "AvgVolume", "BreakoutHigh"])
+                    
+                    if df_clean.empty or len(df_clean) < 2:
+                        continue
+
+                    latest = df_clean.iloc[-1]
+                    
+                    # CRITICAL FIX: Cast to float instead of relying on fragile .item()
+                    close_price = float(latest["Close"])
+                    dma50 = float(latest["50DMA"])
+                    rsi = float(latest["RSI"])
+                    current_volume = float(latest["Volume"])
+                    avg_volume = float(latest["AvgVolume"])
+                    
+                    # Get breakout level from the day *before* the latest day
+                    breakout_level = float(df_clean["BreakoutHigh"].iloc[-2])
 
                     # Calculations
                     distance_from_dma = ((close_price - dma50) / dma50) * 100
                     volume_ratio = (current_volume / avg_volume) if avg_volume > 0 else 0
                     breakout_strength = ((close_price - breakout_level) / breakout_level) * 100
 
-                    stock_return = ((close_series.iloc[-1] - close_series.iloc[-20]) / close_series.iloc[-20]) * 100
+                    # Trailing Stock Return (Last 20 days on clean DF)
+                    stock_return = ((df_clean["Close"].iloc[-1] - df_clean["Close"].iloc[-20]) / df_clean["Close"].iloc[-20]) * 100
                     relative_strength = stock_return - nifty_return_val
-                    avg_range = df["DailyRange"].rolling(10).mean().iloc[-1]
+                    avg_range = df_clean["DailyRange"].rolling(10).mean().iloc[-1]
 
                     # Scoring
                     score = 0
@@ -197,11 +205,11 @@ with st.spinner("Running calculations..."):
                     score += min(max(relative_strength * 5, 0), 100) * 0.30
                     score += min(distance_from_dma * 5, 100) * 0.25
 
-                    # Backtesting Metrics
+                    # Backtesting Metrics (Using the un-dropped 'df' to ensure we have maximum historical depth)
                     future_return = 0
                     if len(df) > holding_period:
-                        future_close = df["Close"].iloc[-1]
-                        past_close = df["Close"].iloc[-holding_period]
+                        future_close = float(df["Close"].iloc[-1])
+                        past_close = float(df["Close"].iloc[-(holding_period + 1)])
                         future_return = ((future_close - past_close) / past_close) * 100
 
                     # Adaptive Logic
@@ -259,12 +267,12 @@ with st.spinner("Running calculations..."):
                                 "Signal": "20D BREAKOUT ✅"
                             })
                 except Exception as e:
-                    pass
+                    # Print to terminal for debugging instead of failing silently or crashing Streamlit UI
+                    print(f"⚠️ Error calculating {stock}: {e}")
 
 # =========================
 # DISPLAY RESULTS
 # =========================
-# Explicitly force dataframe to clean itself of any remaining missing values before Streamlit draws it
 results_df = pd.DataFrame(results).fillna(0)
 
 if results_df.empty:
