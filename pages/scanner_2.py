@@ -160,7 +160,7 @@ with st.spinner("Running calculations..."):
 
                     # Only enforce conditions IF data was successfully fetched (market_cap > 0)
                     if market_cap > 0:
-                        if not (market_cap > 50000000000 and roe > 0.15 and profit_margin > 0.10 and revenue_growth > 0 and debt_to_equity < 1 and pe_ratio < 50):
+                        if not (market_cap > 10000000 and roe > 0.10 and profit_margin > 0.10 and revenue_growth > 0 and debt_to_equity < 1 and pe_ratio < 50):
                             continue
 
                     # Price & Indicators
