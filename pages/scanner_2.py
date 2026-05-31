@@ -9,6 +9,8 @@ import yfinance as yf
 import gspread
 import datetime
 import pytz
+import json
+from google.oauth2.service_account import Credentials
 
 from utils.data_fetcher import get_price_data
 from utils.market_phase import get_market_phase
@@ -41,10 +43,25 @@ st.write(f"Data locked for trading day: {current_market_key}")
 # GOOGLE SHEETS CONNECTION
 # =========================================
 def get_google_client():
-    if "gcp_service_account" in st.secrets:
-        return gspread.service_account_from_dict(dict(st.secrets["gcp_service_account"]))
-    else:
-        return gspread.service_account(filename="data/google_credentials.json")
+    """
+    Smart auth:
+    - Safely tries Streamlit Secrets on cloud
+    - Falls back to local JSON file on desktop
+    """
+    scope = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
+
+    # Safely check for Streamlit secrets without crashing if the file is missing
+    try:
+        if "gcp_service_account" in st.secrets:
+            creds_dict = dict(st.secrets["gcp_service_account"])
+            return gspread.authorize(Credentials.from_service_account_info(creds_dict, scopes=scope))
+    except FileNotFoundError:
+        pass  # No secrets.toml found, move on to the local fallback
+
+    # Fallback to local JSON file
+    return gspread.authorize(Credentials.from_service_account_file("data/google_credentials.json", scopes=scope))
+
+
 
 @st.cache_data(show_spinner=False)
 def get_tickers_from_sheet(cache_key):
@@ -57,6 +74,7 @@ def get_tickers_from_sheet(cache_key):
     except Exception as e:
         st.error(f"❌ Failed to read Google Sheet: {e}")
         return []
+
 
 # =========================
 # SMART CACHING ENGINE
@@ -149,8 +167,7 @@ with st.spinner("Running calculations..."):
                     df = data["df"].copy()
                     info = data["info"]
 
-                    # Fundamentals with graceful fallback. 
-                    # If Yahoo fails to fetch, we don't drop the stock purely due to missing data.
+                    # Fundamentals with graceful fallback.
                     market_cap = float(info.get("marketCap") or 0)
                     roe = float(info.get("returnOnEquity") or 0)
                     profit_margin = float(info.get("profitMargins") or 0)
@@ -160,31 +177,40 @@ with st.spinner("Running calculations..."):
 
                     # Only enforce conditions IF data was successfully fetched (market_cap > 0)
                     if market_cap > 0:
-                        if not (market_cap > 10000000 and roe > 0.10 and profit_margin > 0.10 and revenue_growth > 0 and debt_to_equity < 1 and pe_ratio < 50):
+                        if not (
+                                market_cap > 10000000 and roe > 0.10 and profit_margin > 0.10 and revenue_growth > 0 and debt_to_equity < 1 and pe_ratio < 50):
                             continue
 
+                    # ==========================================
+                    # --- CRITICAL FIX: SQUEEZE EVERYTHING ---
+                    # ==========================================
+                    close_series = df["Close"].squeeze()
+                    high_series = df["High"].squeeze()
+                    low_series = df["Low"].squeeze()
+                    volume_series = df["Volume"].squeeze()
+
                     # Price & Indicators
-                    df["50DMA"] = df["Close"].rolling(50).mean()
-                    df["RSI"] = ta.momentum.RSIIndicator(close=df["Close"], window=14).rsi()
-                    df["AvgVolume"] = df["Volume"].rolling(20).mean()
-                    df["BreakoutHigh"] = df["Close"].rolling(breakout_days).max()
-                    df["DailyRange"] = ((df["High"] - df["Low"]) / df["Close"]) * 100
+                    df["50DMA"] = close_series.rolling(50).mean()
+                    df["RSI"] = ta.momentum.RSIIndicator(close=close_series, window=14).rsi()
+                    df["AvgVolume"] = volume_series.rolling(20).mean()
+                    df["BreakoutHigh"] = close_series.rolling(breakout_days).max()
+                    df["DailyRange"] = ((high_series - low_series) / close_series) * 100
 
                     # CRITICAL FIX: Drop NaNs to prevent toxic math conditions later
                     df_clean = df.dropna(subset=["50DMA", "RSI", "AvgVolume", "BreakoutHigh"])
-                    
+
                     if df_clean.empty or len(df_clean) < 2:
                         continue
 
                     latest = df_clean.iloc[-1]
-                    
-                    # CRITICAL FIX: Cast to float instead of relying on fragile .item()
+
+                    # Cast to float instead of relying on fragile .item()
                     close_price = float(latest["Close"])
                     dma50 = float(latest["50DMA"])
                     rsi = float(latest["RSI"])
                     current_volume = float(latest["Volume"])
                     avg_volume = float(latest["AvgVolume"])
-                    
+
                     # Get breakout level from the day *before* the latest day
                     breakout_level = float(df_clean["BreakoutHigh"].iloc[-2])
 
@@ -194,7 +220,9 @@ with st.spinner("Running calculations..."):
                     breakout_strength = ((close_price - breakout_level) / breakout_level) * 100
 
                     # Trailing Stock Return (Last 20 days on clean DF)
-                    stock_return = ((df_clean["Close"].iloc[-1] - df_clean["Close"].iloc[-20]) / df_clean["Close"].iloc[-20]) * 100
+                    stock_return = ((df_clean["Close"].iloc[-1] - df_clean["Close"].iloc[-20]) / df_clean["Close"].iloc[
+                        -20]) * 100
+
                     relative_strength = stock_return - nifty_return_val
                     avg_range = df_clean["DailyRange"].rolling(10).mean().iloc[-1]
 
