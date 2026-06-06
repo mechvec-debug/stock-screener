@@ -359,5 +359,15 @@ if run_optimization:
         optimization_summary.columns = ["RSI", "Volume", "Avg Score", "Avg Return", "Signals Found"]
         optimization_summary = optimization_summary.sort_values(by="Avg Return", ascending=False)
         st.dataframe(optimization_summary, width="stretch")
+
+        # Add download button for optimization data
+        opt_csv = convert_df(optimization_summary)
+        st.download_button(
+            label="📥 Download Optimization Summary",
+            data=opt_csv,
+            file_name=f"optimization_results_{current_market_key}.csv",
+            mime="text/csv",
+        )
     else:
         st.warning("No optimization results yielded any signals.")
+        
