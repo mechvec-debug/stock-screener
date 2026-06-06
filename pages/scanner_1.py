@@ -218,7 +218,7 @@ def fundamentals_pass(info):
 
         return all([
             market_cap > 1000,
-            sales_growth > 5,
+            sales_growth > 10,
             opm > 10,
             roe > 8,
             debt_to_equity < 1.5
