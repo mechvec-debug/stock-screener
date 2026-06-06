@@ -309,6 +309,24 @@ else:
     results_df = results_df.sort_values(by="Score", ascending=False)
     st.dataframe(results_df, width="stretch")
 
+    # ==========================================
+    # ADDED: CSV EXPORT FUNCTIONALITY
+    # ==========================================
+    @st.cache_data
+    def convert_df(df):
+        # IMPORTANT: Cache the conversion to prevent computation on every rerun
+        return df.to_csv(index=False).encode('utf-8')
+
+    csv_data = convert_df(results_df)
+
+    st.download_button(
+        label="📥 Download Validated Results (CSV)",
+        data=csv_data,
+        file_name=f"scanner_2_results_{current_market_key}.csv",
+        mime="text/csv",
+    )
+    # ==========================================
+
     st.subheader("📈 Backtest Summary")
 
     avg_return = results_df["30D Return %"].mean()
