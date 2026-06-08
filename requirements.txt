@@ -4,3 +4,6 @@ ta
 yfinance
 gspread
 gspread-dataframe
+numpy
+google-auth
+pytz
