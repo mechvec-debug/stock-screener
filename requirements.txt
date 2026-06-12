@@ -7,3 +7,5 @@ gspread-dataframe
 numpy
 google-auth
 pytz
+pandas_ta
+oauth2client
