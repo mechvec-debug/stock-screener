@@ -5,7 +5,7 @@ import os
 # Import your modules based on the new folder structure
 import config
 from data.fetcher import fetch_data, fetch_market_cap
-from utils.indicators import calculate_indicators
+from utils.indicators import calculate_ema_pullback_indicators
 from utils.evaluator import evaluate_strategy, calculate_risk
 from data.exporter import get_google_sheet, append_to_sheet
 
@@ -66,7 +66,7 @@ if st.button("🚀 Run Full Scan", type="primary"):
         try:
             df = fetch_data(ticker, config.PERIOD, config.INTERVAL)
             market_cap = fetch_market_cap(ticker)
-            df_indicators = calculate_indicators(df)
+            df_indicators = calculate_ema_pullback_indicators(df)
             
             current = df_indicators.iloc[-1]
             previous = df_indicators.iloc[-2]
