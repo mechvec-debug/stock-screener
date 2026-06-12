@@ -117,10 +117,10 @@ if st.button("🚀 Run Full Scan", type="primary"):
     if scan_results:
         results_df = pd.DataFrame(scan_results)
         
-        # Display the results table on the page, highlighting PASSED rows
+# Display the results table on the page, highlighting PASSED rows
         st.subheader("Scan Results")
         st.dataframe(
-            results_df.style.applymap(
+            results_df.style.map(
                 lambda x: "background-color: lightgreen; color: black" if x == "PASSED" else "", 
                 subset=["Status"]
             ),
