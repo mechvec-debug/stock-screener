@@ -1,598 +1,128 @@
-# =========================================
-# FILE: pages/tech_screener.py
-# =========================================
-
 import streamlit as st
 import pandas as pd
-import numpy as np
-import datetime
-import pytz
-import gspread
+import os
 
-from google.oauth2.service_account import Credentials
+# Import your modules based on the new folder structure
+import config
+from data.fetcher import fetch_data, fetch_market_cap
+from utils.indicators import calculate_indicators
+from utils.evaluator import evaluate_strategy, calculate_risk
+from data.exporter import get_google_sheet, append_to_sheet
 
-from utils.cache_fetcher import get_cached_ohlc
-from utils.indicator_engine import add_swing_indicators
+# --- PAGE SETUP ---
+st.set_page_config(page_title="Technical Screener", page_icon="📈")
+st.title("📈 Technical Strategy Screener")
 
+GOOGLE_SHEET_NAME = "My_Trading_Scanner_Results" # Update to your actual sheet name
 
-# =========================================
-# CONFIGURATION
-# =========================================
-
-CONFIG = {
-
-    "RSI_RESET": 40,
-    "RSI_RECOVERY": 55,
-
-    "ADX_MIN": 25,
-
-    "VOL_MULTIPLIER": 2.0,
-
-    "MIN_PRICE": 100,
-
-    "MIN_TRADED_VALUE": 100000000,
-
-    "MAX_DISTANCE_EMA21": 8,
-
-    "ATR_SL": 1.5,
-
-    "ATR_TP1": 1.5,
-
-    "ATR_TP2": 3.0
-}
-
-
-# =========================================
-# MARKET DATE
-# =========================================
-
-def get_market_rollover_key():
-
-    ist = pytz.timezone("Asia/Kolkata")
-
-    now = datetime.datetime.now(ist)
-
-    shifted_time = now - datetime.timedelta(hours=16)
-
-    return shifted_time.strftime("%Y-%m-%d")
-
-
-# =========================================
-# GOOGLE SHEETS
-# =========================================
-
-def get_google_client():
-
-    scope = [
-        "https://www.googleapis.com/auth/spreadsheets",
-        "https://www.googleapis.com/auth/drive"
-    ]
-
+def load_tickers_from_csv(filepath="stocks.csv"):
+    """Reads tickers from the root stocks.csv file."""
+    if not os.path.exists(filepath):
+        st.error(f"Could not find '{filepath}'.")
+        return []
+    
     try:
-
-        if "gcp_service_account" in st.secrets:
-
-            creds_dict = dict(
-                st.secrets["gcp_service_account"]
-            )
-
-            return gspread.authorize(
-                Credentials.from_service_account_info(
-                    creds_dict,
-                    scopes=scope
-                )
-            )
-
-    except Exception:
-        pass
-
-    return gspread.authorize(
-        Credentials.from_service_account_file(
-            "data/google_credentials.json",
-            scopes=scope
-        )
-    )
-
-
-def get_tickers_from_sheet():
-
-    try:
-
-        gc = get_google_client()
-
-        sh = gc.open("Stock_List")
-
-        worksheet = sh.worksheet(
-            "Fundamentals"
-        )
-
-        tickers = worksheet.col_values(1)[1:]
-
-        return [
-            t.strip()
-            for t in tickers
-            if t.strip()
-        ]
-
+        # Assuming the CSV has no header and symbols are in the first column
+        # Adjust 'header=None' if your CSV has a title row like 'Symbol'
+        df_symbols = pd.read_csv(filepath, header=None)
+        
+        formatted_tickers = []
+        for symbol in df_symbols[0].dropna():
+            clean_symbol = str(symbol).strip()
+            if clean_symbol:
+                formatted_tickers.append(f"{clean_symbol}.NS")
+        return formatted_tickers
     except Exception as e:
-
-        print(e)
-
+        st.error(f"Error reading CSV: {e}")
         return []
 
-
-# =========================================
-# MARKET FILTER
-# =========================================
-
-def get_market_mode():
-
-    try:
-
-        nifty = get_cached_ohlc("^NSEI")
-
-        if nifty.empty:
-            return "UNKNOWN"
-
-        nifty = add_swing_indicators(nifty)
-
-        latest = nifty.iloc[-1]
-
-        if latest["Close"] > latest["EMA200"]:
-
-            return "BULLISH"
-
-        return "WEAK"
-
-    except:
-
-        return "UNKNOWN"
-
-
-# =========================================
-# SCORE ENGINE
-# =========================================
-
-def calculate_score(latest):
-
-    score = (
-
-        latest["ADX"] * 0.30
-
-        +
-
-        latest["RSI"] * 0.20
-
-        +
-
-        latest["VolumeRatio"] * 15
-
-        +
-
-        latest["TrendScore"] * 0.20
-
-    )
-
-    return round(score, 2)
-
-
-# =========================================
-# ACTIVE SIGNAL
-# =========================================
-
-def get_swing_signal(ticker, df, market_mode):
-
-    try:
-
-        latest = df.iloc[-1]
-
-        close = latest["Close"]
-
-        trend = (
-
-            close > latest["EMA200"]
-
-            and
-
-            latest["EMA21"] >
-            latest["EMA50"]
-
-            and
-
-            latest["EMA50"] >
-            latest["EMA200"]
-
-        )
-
-        rsi_reset = (
-
-            df["RSI"]
-            .tail(10)
-            .min()
-
-            < CONFIG["RSI_RESET"]
-
-        )
-
-        rsi_recovery = (
-
-            latest["RSI"]
-            > CONFIG["RSI_RECOVERY"]
-
-        )
-
-        adx_ok = (
-
-            latest["ADX"]
-            > CONFIG["ADX_MIN"]
-
-        )
-
-        volume_ok = (
-
-            latest["VolumeRatio"]
-            > CONFIG["VOL_MULTIPLIER"]
-
-        )
-
-        breakout = (
-
-            close >
-            latest["HHV10"]
-
-        )
-
-        atr_ok = (
-
-            latest["ATR"]
-            >
-            latest["ATR_MA20"]
-
-        )
-
-        liquidity_ok = (
-
-            latest["AvgTradedValue20"]
-            >
-            CONFIG["MIN_TRADED_VALUE"]
-
-        )
-
-        price_ok = (
-
-            close >
-            CONFIG["MIN_PRICE"]
-
-        )
-
-        distance_ok = (
-
-            latest["DistanceEMA21"]
-            <
-            CONFIG["MAX_DISTANCE_EMA21"]
-
-        )
-
-        signal = all([
-
-            trend,
-
-            rsi_reset,
-
-            rsi_recovery,
-
-            adx_ok,
-
-            volume_ok,
-
-            breakout,
-
-            atr_ok,
-
-            liquidity_ok,
-
-            price_ok,
-
-            distance_ok
-
-        ])
-
-        if not signal:
-
-            return None
-
-        atr = latest["ATR"]
-
-        entry = close
-
-        stoploss = (
-            entry -
-            (CONFIG["ATR_SL"] * atr)
-        )
-
-        target1 = (
-            entry +
-            (CONFIG["ATR_TP1"] * atr)
-        )
-
-        target2 = (
-            entry +
-            (CONFIG["ATR_TP2"] * atr)
-        )
-
-        risk_pct = round(
-            ((entry - stoploss) / entry) * 100,
-            2
-        )
-
-        reward_pct = round(
-            ((target2 - entry) / entry) * 100,
-            2
-        )
-
-        rr = round(
-            reward_pct / risk_pct,
-            2
-        )
-
-        score = calculate_score(
-            latest
-        )
-
-        grade = "B"
-
-        if score >= 90:
-            grade = "A+"
-
-        elif score >= 80:
-            grade = "A"
-
-        return {
-
-            "Ticker": ticker,
-
-            "Market": market_mode,
-
-            "Grade": grade,
-
-            "Score": score,
-
-            "Price": round(entry, 2),
-
-            "RSI": round(
-                latest["RSI"], 2
+# --- UI LAYOUT ---
+st.write("Click below to run the EMA/RSI Pullback strategy against the stock list.")
+
+if st.button("🚀 Run Full Scan", type="primary"):
+    stock_list = load_tickers_from_csv()
+    
+    if not stock_list:
+        st.warning("No tickers loaded to scan.")
+        st.stop()
+
+    sheet = get_google_sheet(GOOGLE_SHEET_NAME)
+    if sheet:
+        st.toast("Connected to Google Sheets!", icon="✅")
+    else:
+        st.toast("Could not connect to Google Sheets. Data will only show on screen.", icon="⚠️")
+
+    # Create a visual progress bar and status text
+    progress_bar = st.progress(0)
+    status_text = st.empty()
+    
+    # Store results to display in a Streamlit dataframe later
+    scan_results = []
+    total_stocks = len(stock_list)
+
+    for i, ticker in enumerate(stock_list):
+        status_text.text(f"Scanning {ticker}... ({i+1}/{total_stocks})")
+        
+        try:
+            df = fetch_data(ticker, config.PERIOD, config.INTERVAL)
+            market_cap = fetch_market_cap(ticker)
+            df_indicators = calculate_indicators(df)
+            
+            current = df_indicators.iloc[-1]
+            previous = df_indicators.iloc[-2]
+            
+            is_passed = evaluate_strategy(current, previous)
+            
+            if is_passed:
+                risk_levels = calculate_risk(current)
+                status = "PASSED"
+            else:
+                status = "FAILED"
+                risk_levels = {"Entry": 0, "SL": 0, "TP1": 0, "TP2": 0}
+
+            # Prepare the row dictionary for Streamlit viewing
+            row_dict = {
+                "Ticker": ticker.replace(".NS", ""),
+                "Market Cap": market_cap,
+                "Close": round(current['Close'], 2),
+                "EMA_200": round(current['EMA_200'], 2),
+                "RSI_14": round(current['RSI_14'], 2),
+                "Volume": int(current['Volume']),
+                "Status": status,
+                "Entry": round(risk_levels['Entry'], 2),
+                "SL": round(risk_levels['SL'], 2)
+            }
+            scan_results.append(row_dict)
+
+            # Prepare the list for Google Sheets export
+            if sheet and is_passed: # Optional: Only push PASSED setups to the sheet to save space
+                sheet_row = [
+                    row_dict["Ticker"], row_dict["Market Cap"], row_dict["Close"],
+                    round(current['EMA_200'], 2), round(current['EMA_50'], 2), round(current['EMA_21'], 2),
+                    round(current['Open'], 2), round(current['Close'], 2), round(current['High'], 2), round(current['Low'], 2),
+                    row_dict["RSI_14"], row_dict["Volume"],
+                    f"PASSED (Entry: {row_dict['Entry']}, SL: {row_dict['SL']})"
+                ]
+                append_to_sheet(sheet, sheet_row)
+
+        except Exception as e:
+            st.toast(f"Error processing {ticker}: {e}")
+        
+        # Update progress bar
+        progress_bar.progress((i + 1) / total_stocks)
+
+    # --- FINAL OUTPUT ---
+    status_text.text("Scan Complete!")
+    
+    if scan_results:
+        results_df = pd.DataFrame(scan_results)
+        
+        # Display the results table on the page, highlighting PASSED rows
+        st.subheader("Scan Results")
+        st.dataframe(
+            results_df.style.applymap(
+                lambda x: "background-color: lightgreen; color: black" if x == "PASSED" else "", 
+                subset=["Status"]
             ),
-
-            "ADX": round(
-                latest["ADX"], 2
-            ),
-
-            "Volume Ratio": round(
-                latest["VolumeRatio"], 2
-            ),
-
-            "ATR": round(
-                atr, 2
-            ),
-
-            "Entry": round(
-                entry, 2
-            ),
-
-            "SL": round(
-                stoploss, 2
-            ),
-
-            "TP1": round(
-                target1, 2
-            ),
-
-            "TP2": round(
-                target2, 2
-            ),
-
-            "Risk %": risk_pct,
-
-            "Reward %": reward_pct,
-
-            "RR": rr
-
-        }
-
-    except Exception as e:
-
-        print(
-            f"{ticker}: {e}"
+            use_container_width=True
         )
-
-        return None
-
-
-# =========================================
-# WATCHLIST
-# =========================================
-
-def get_watchlist_signal(ticker, df):
-
-    latest = df.iloc[-1]
-
-    trend = (
-        latest["EMA21"] >
-        latest["EMA50"] >
-        latest["EMA200"]
-    )
-
-    watch = (
-
-        trend
-
-        and
-
-        latest["RSI"] > 50
-
-        and
-
-        latest["ADX"] > 20
-
-        and
-
-        latest["VolumeRatio"] > 1.5
-
-        and
-
-        latest["Close"] <= latest["HHV10"]
-
-    )
-
-    if watch:
-
-        return {
-
-            "Ticker": ticker,
-
-            "Price": round(
-                latest["Close"], 2
-            ),
-
-            "RSI": round(
-                latest["RSI"], 2
-            ),
-
-            "ADX": round(
-                latest["ADX"], 2
-            ),
-
-            "Volume Ratio": round(
-                latest["VolumeRatio"], 2
-            )
-
-        }
-
-    return None
-
-
-# =========================================
-# RUN SCANNER
-# =========================================
-
-@st.cache_data(show_spinner=False)
-
-def run_scanner(cache_key):
-
-    active = []
-
-    watchlist = []
-
-    tickers = get_tickers_from_sheet()
-
-    market_mode = get_market_mode()
-
-    for ticker in tickers:
-
-        df = get_cached_ohlc(ticker)
-
-        if df.empty:
-            continue
-
-        df = add_swing_indicators(df)
-
-        if df.empty:
-            continue
-
-        active_signal = get_swing_signal(
-            ticker,
-            df,
-            market_mode
-        )
-
-        if active_signal:
-
-            active.append(
-                active_signal
-            )
-
-        else:
-
-            watch = get_watchlist_signal(
-                ticker,
-                df
-            )
-
-            if watch:
-
-                watchlist.append(
-                    watch
-                )
-
-    active_df = pd.DataFrame(active)
-
-    watch_df = pd.DataFrame(watchlist)
-
-    if not active_df.empty:
-
-        active_df = (
-            active_df
-            .sort_values(
-                "Score",
-                ascending=False
-            )
-        )
-
-    return active_df, watch_df
-
-
-# =========================================
-# STREAMLIT UI
-# =========================================
-
-st.title(
-    "🚀 Swing Engine Scanner"
-)
-
-market_key = (
-    get_market_rollover_key()
-)
-
-active_df, watch_df = run_scanner(
-    market_key
-)
-
-market_mode = get_market_mode()
-
-st.info(
-    f"Market Mode: {market_mode}"
-)
-
-col1, col2 = st.columns(2)
-
-col1.metric(
-    "🚀 Active Signals",
-    len(active_df)
-)
-
-col2.metric(
-    "👀 Watchlist",
-    len(watch_df)
-)
-
-st.divider()
-
-st.subheader(
-    "🚀 Active Signals"
-)
-
-st.dataframe(
-    active_df,
-    use_container_width=True
-)
-
-st.divider()
-
-st.subheader(
-    "👀 Watchlist Candidates"
-)
-
-st.dataframe(
-    watch_df,
-    use_container_width=True
-)
