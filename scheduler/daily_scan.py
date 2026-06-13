@@ -23,7 +23,7 @@ def main():
     df_symbols = pd.read_csv(filepath, header=None)
     stock_list = [f"{str(sym).strip()}.NS" for sym in df_symbols[0].dropna() if str(sym).strip()]
     
-    # Connect to the specific Google Sheet Name
+    # ---> FIX: Added quotes around "Stock_List" <---
     sheet = get_google_sheet("Stock_List")
     
     if not sheet:
