@@ -2,9 +2,8 @@ name: Daily Post-Market Screener
 
 on:
   schedule:
-    # 11:00 UTC is exactly 16:30 IST. Runs Monday through Friday (1-5).
     - cron: '0 11 * * 1-5'
-  workflow_dispatch: # Allows you to manually trigger it from the GitHub website
+  workflow_dispatch:
 
 jobs:
   run-screener:
@@ -22,9 +21,10 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Create Google Credentials JSON
-        env:
-          GCP_CREDENTIALS: ${{ secrets.GCP_CREDENTIALS }}
-        run: echo "$GCP_CREDENTIALS" > credentials.json
+        run: |
+          cat << 'EOF' > credentials.json
+          ${{ secrets.GCP_CREDENTIALS }}
+          EOF
 
       - name: Run Daily Scan
         run: python scheduler/daily_scan.py
