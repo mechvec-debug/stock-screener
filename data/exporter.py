@@ -29,7 +29,6 @@ def append_to_sheet(sheet, row_data):
     """Appends a single row of data to the Google Sheet."""
     if sheet:
         try:
-            # gspread requires standard Python types, so we convert numpy floats/ints to standard formats
             formatted_row = [float(val) if isinstance(val, (int, float)) else str(val) for val in row_data]
             sheet.append_row(formatted_row)
         except Exception as e:
@@ -40,7 +39,6 @@ def overwrite_sheet(sheet, headers, all_rows):
     if sheet:
         try:
             sheet.clear()
-            # gspread handles bulk inserts much faster than row-by-row
             sheet.append_rows([headers] + all_rows)
         except Exception as e:
             print(f"Failed to overwrite sheet: {e}")
