@@ -31,10 +31,8 @@ def append_to_sheet(sheet, row_data):
         try:
             formatted_row = [float(val) if isinstance(val, (int, float)) else str(val) for val in row_data]
             sheet.append_row(formatted_row)
-            return True
         except Exception as e:
             print(f"Failed to write to sheet: {e}")
-            return False
 
 def overwrite_sheet(sheet, headers, all_rows):
     """Clears the sheet and writes a fresh batch of data."""
@@ -42,8 +40,5 @@ def overwrite_sheet(sheet, headers, all_rows):
         try:
             sheet.clear()
             sheet.append_rows([headers] + all_rows)
-            return True
         except Exception as e:
             print(f"Failed to overwrite sheet: {e}")
-            return False
-        
