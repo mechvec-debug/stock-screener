@@ -10,7 +10,8 @@ from data.exporter import get_google_sheet, overwrite_sheet
 st.set_page_config(page_title="Technical Screener", page_icon="📈")
 st.title("📈 Technical Strategy Screener")
 
-GOOGLE_SHEET_NAME = "My_Trading_Scanner_Results" # Update this
+# Make sure this exactly matches your Google file name
+GOOGLE_SHEET_NAME = "Stock_List" 
 
 def load_tickers_from_csv(filepath="stocks.csv"):
     if not os.path.exists(filepath):
@@ -20,40 +21,45 @@ def load_tickers_from_csv(filepath="stocks.csv"):
 
 # --- 1. INSTANT LOAD FROM GOOGLE SHEETS ---
 st.subheader("📊 Latest End-of-Day Results")
-st.caption("Data is fetched from the latest 4:30 PM IST automated run.")
+st.caption("Data is fetched directly from your Stock_List Google Sheet.")
 
 sheet = get_google_sheet(GOOGLE_SHEET_NAME)
 if sheet:
     try:
-        # Fetch all data from the sheet
+        # Fetch all records from the sheet
         records = sheet.get_all_records()
         if records:
             df_all = pd.DataFrame(records)
             
-            # Split the data into our two boxes based on the Status column
+            # Split the data into our two boxes
             df_passed = df_all[df_all['Status'] == "PASSED"]
             df_failed = df_all[df_all['Status'] != "PASSED"]
             
+            # --- FIRST BOX: EXECUTION READY ---
             st.markdown("### 🟢 Execution Ready")
             if not df_passed.empty:
-                # Select only the 4 requested columns
+                # 4 Columns: Ticker name, Current Price, Entry Price, Stop Loss
                 display_passed = df_passed[["Ticker", "Current Price", "Entry Price", "Stop Loss"]]
                 st.dataframe(display_passed, use_container_width=True, hide_index=True)
             else:
                 st.info("No stocks met all criteria for execution.")
 
             st.markdown("---")
+
+            # --- SECOND BOX: NO SIGNAL ---
             st.markdown("### 🔴 NO SIGNAL")
             if not df_failed.empty:
-                # Select only the 3 requested columns
+                # 3 Columns: Ticker name, Current Price, Status (Failure reason)
                 display_failed = df_failed[["Ticker", "Current Price", "Status"]]
                 st.dataframe(display_failed, use_container_width=True, hide_index=True)
             else:
-                st.success("All stocks passed!")
+                st.success("Wow! All stocks passed!")
         else:
-            st.warning("Google Sheet is currently empty. Waiting for the first automated scan.")
+            st.warning("Google Sheet is currently empty. Run a manual scan below.")
     except Exception as e:
         st.error(f"Error reading Google Sheet: {e}")
+else:
+    st.error("Could not connect to Google Sheets.")
 
 st.markdown("---")
 
@@ -90,7 +96,8 @@ with st.expander("⚙️ Manual Intraday Scan"):
                 
                 if is_passed:
                     risk_levels = calculate_risk(current)
-                    all_rows.append([clean_ticker, current_price, "PASSED", round(risk_levels['Entry'], 2), round(risk_levels['SL'], 2), 0,0,0,0,0,0,0,0,0]) # Padded for simplicity in UI override
+                    # Note: We pad the rest of the columns with 0s for speed during the intraday scan
+                    all_rows.append([clean_ticker, current_price, "PASSED", round(risk_levels['Entry'], 2), round(risk_levels['SL'], 2), 0,0,0,0,0,0,0,0,0])
                 else:
                     all_rows.append([clean_ticker, current_price, reason, 0, 0, 0,0,0,0,0,0,0,0,0])
 
@@ -100,5 +107,5 @@ with st.expander("⚙️ Manual Intraday Scan"):
 
         # Overwrite sheet with manual run data
         overwrite_sheet(sheet, headers, all_rows)
-        status_text.text("Live scan complete! Refresh the page to see updated tables.")
-        st.rerun() # Instantly refreshes the page to show the new Google Sheet data
+        status_text.text("Live scan complete! Refreshing page...")
+        st.rerun() # Instantly reloads the page to display the newly written data
