@@ -20,7 +20,7 @@ def get_google_sheet(sheet_name, credentials_file='credentials.json'):
         try:
             creds = ServiceAccountCredentials.from_json_keyfile_name(credentials_file, scope)
         except Exception as e:
-            print(f"FATAL ERROR reading JSON. Your GitHub Secret might be empty or formatted wrong: {e}")
+            print(f"FATAL ERROR reading JSON: {e}")
             return None
 
     # 2. Otherwise, assume we are on Streamlit Cloud
