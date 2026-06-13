@@ -25,6 +25,6 @@ jobs:
         env:
           GCP_CREDENTIALS: ${{ secrets.GCP_CREDENTIALS }}
         run: echo "$GCP_CREDENTIALS" > credentials.json
-
+sheet = get_google_sheet("Stock_List")
       - name: Run Daily Scan
         run: python scheduler/daily_scan.py
