@@ -28,7 +28,7 @@ def get_google_sheet(sheet_name, credentials_file='credentials.json'):
         # Authorize and connect
         client = gspread.authorize(creds)
         # Remember to change .sheet1 to .worksheet("tech_screener") if you renamed the tab
-        sheet = client.open(Stock_List).sheet1  
+        sheet = client.open(Stock_List).tech_screener  
         return sheet
         
     except Exception as e:
