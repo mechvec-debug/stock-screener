@@ -25,7 +25,7 @@ def get_google_sheet(sheet_name, credentials_file='credentials.json'):
         print(f"Failed to connect to Google Sheets: {e}")
         return None
 
-def append_to_sheet(sheet, row_data):
+def append_to_sheet(Stock_List, row_data):
     """Appends a single row of data to the Google Sheet."""
     if sheet:
         try:
