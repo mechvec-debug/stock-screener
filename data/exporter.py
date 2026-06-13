@@ -2,7 +2,6 @@ import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 import os
 
-
 def get_google_sheet(sheet_name, credentials_file='credentials.json'):
     """Authenticates and returns the Google Sheet object."""
     if not os.path.exists(credentials_file):
@@ -10,10 +9,12 @@ def get_google_sheet(sheet_name, credentials_file='credentials.json'):
         return None
 
     # Define the scope of access
-    scope = ["https://spreadsheets.google.com/feeds",
-             'https://www.googleapis.com/auth/spreadsheets',
-             "https://www.googleapis.com/auth/drive.file",
-             "https://www.googleapis.com/auth/drive"]
+    scope = [
+        "https://spreadsheets.google.com/feeds",
+        "https://www.googleapis.com/auth/spreadsheets",
+        "https://www.googleapis.com/auth/drive.file",
+        "https://www.googleapis.com/auth/drive"
+    ]
 
     try:
         creds = ServiceAccountCredentials.from_json_keyfile_name(credentials_file, scope)
@@ -24,7 +25,6 @@ def get_google_sheet(sheet_name, credentials_file='credentials.json'):
         print(f"Failed to connect to Google Sheets: {e}")
         return None
 
-
 def append_to_sheet(sheet, row_data):
     """Appends a single row of data to the Google Sheet."""
     if sheet:
@@ -34,7 +34,8 @@ def append_to_sheet(sheet, row_data):
             sheet.append_row(formatted_row)
         except Exception as e:
             print(f"Failed to write to sheet: {e}")
- def overwrite_sheet(sheet, headers, all_rows):
+
+def overwrite_sheet(sheet, headers, all_rows):
     """Clears the sheet and writes a fresh batch of data."""
     if sheet:
         try:
@@ -43,4 +44,3 @@ def append_to_sheet(sheet, row_data):
             sheet.append_rows([headers] + all_rows)
         except Exception as e:
             print(f"Failed to overwrite sheet: {e}")
-            
