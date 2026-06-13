@@ -11,8 +11,6 @@ from utils.indicators import calculate_ema_pullback_indicators
 from utils.evaluator import evaluate_strategy, calculate_risk
 from data.exporter import get_google_sheet, overwrite_sheet
 
-GOOGLE_SHEET_NAME = "Stock_List" # Update this
-
 def main():
     print("Starting automated daily scan...")
     
@@ -25,7 +23,9 @@ def main():
     df_symbols = pd.read_csv(filepath, header=None)
     stock_list = [f"{str(sym).strip()}.NS" for sym in df_symbols[0].dropna() if str(sym).strip()]
     
-    sheet = get_google_sheet(Stock_List)
+    # Connect to the specific Google Sheet Name
+    sheet = get_google_sheet("Stock_List")
+    
     if not sheet:
         print("Failed to connect to Google Sheets. Aborting automated scan.")
         return
@@ -75,4 +75,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-  
