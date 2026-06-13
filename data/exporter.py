@@ -1,10 +1,8 @@
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 import os
-import streamlit as st
 
 def get_google_sheet(sheet_name, credentials_file='credentials.json'):
-    """Authenticates and returns the Google Sheet object via Secrets or Local File."""
     scope = [
         "https://spreadsheets.google.com/feeds",
         "https://www.googleapis.com/auth/spreadsheets",
@@ -14,39 +12,39 @@ def get_google_sheet(sheet_name, credentials_file='credentials.json'):
     
     creds = None
 
-    # 1. First, check if credentials.json exists (Local Machine OR GitHub Actions)
-    if os.path.exists(credentials_file):
+    # 1. Check if we are running in GitHub Actions or Local Machine
+    if os.environ.get("GITHUB_ACTIONS") == "true" or os.path.exists(credentials_file):
+        if not os.path.exists(credentials_file):
+            print(f"FATAL ERROR: {credentials_file} is missing in GitHub Actions!")
+            return None
         try:
             creds = ServiceAccountCredentials.from_json_keyfile_name(credentials_file, scope)
         except Exception as e:
-            print(f"Error reading credentials.json: {e}")
-            
-    # 2. If no local file, try Streamlit Secrets (Streamlit Cloud Deployment)
-    if creds is None:
+            print(f"FATAL ERROR reading JSON. Your GitHub Secret might be empty or formatted wrong: {e}")
+            return None
+
+    # 2. Otherwise, assume we are on Streamlit Cloud
+    else:
         try:
+            import streamlit as st
             if "gcp_service_account" in st.secrets:
                 creds_dict = dict(st.secrets["gcp_service_account"])
                 creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
         except Exception:
-            # We catch and ignore the error Streamlit throws when running headlessly
             pass
 
-    # 3. Abort if both methods failed
     if creds is None:
-        print("Error: No credentials found in local directory or Streamlit Secrets.")
+        print("Error: No valid credentials found.")
         return None
 
     try:
-        # Authorize and connect
         client = gspread.authorize(creds)
-        sheet = client.open(sheet_name).worksheet("tech_screener")  
-        return sheet
+        return client.open(sheet_name).worksheet("tech_screener")
     except Exception as e:
         print(f"Failed to connect to Google Sheets: {e}")
         return None
 
 def append_to_sheet(sheet, row_data):
-    """Appends a single row of data to the Google Sheet."""
     if sheet:
         try:
             formatted_row = [float(val) if isinstance(val, (int, float)) else str(val) for val in row_data]
@@ -55,7 +53,6 @@ def append_to_sheet(sheet, row_data):
             print(f"Failed to write to sheet: {e}")
 
 def overwrite_sheet(sheet, headers, all_rows):
-    """Clears the sheet and writes a fresh batch of data."""
     if sheet:
         try:
             sheet.clear()
