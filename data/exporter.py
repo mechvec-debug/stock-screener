@@ -33,9 +33,8 @@ def append_to_sheet(sheet, row_data):
             sheet.append_row(formatted_row)
         except Exception as e:
             print(f"Failed to write to sheet: {e}")
-
 def overwrite_sheet(sheet, headers, all_rows):
-    """Clears the sheet and writes a fresh batch of data."""
+"""Clears the sheet and writes a fresh batch of data."""
     if sheet:
         try:
             sheet.clear()
