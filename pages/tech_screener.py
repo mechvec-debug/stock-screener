@@ -1,135 +1,104 @@
 import streamlit as st
 import pandas as pd
 import os
-
-# Import your modules based on the folder structure
 import config
 from data.fetcher import fetch_data
 from utils.indicators import calculate_ema_pullback_indicators
 from utils.evaluator import evaluate_strategy, calculate_risk
-from data.exporter import get_google_sheet, append_to_sheet
+from data.exporter import get_google_sheet, overwrite_sheet
 
-# --- PAGE SETUP ---
 st.set_page_config(page_title="Technical Screener", page_icon="📈")
 st.title("📈 Technical Strategy Screener")
 
-GOOGLE_SHEET_NAME = "My_Trading_Scanner_Results" # Update to your actual sheet name
+GOOGLE_SHEET_NAME = "My_Trading_Scanner_Results" # Update this
 
 def load_tickers_from_csv(filepath="stocks.csv"):
-    """Reads tickers from the root stocks.csv file."""
     if not os.path.exists(filepath):
-        st.error(f"Could not find '{filepath}'.")
         return []
-    
+    df_symbols = pd.read_csv(filepath, header=None)
+    return [f"{str(sym).strip()}.NS" for sym in df_symbols[0].dropna() if str(sym).strip()]
+
+# --- 1. INSTANT LOAD FROM GOOGLE SHEETS ---
+st.subheader("📊 Latest End-of-Day Results")
+st.caption("Data is fetched from the latest 4:30 PM IST automated run.")
+
+sheet = get_google_sheet(GOOGLE_SHEET_NAME)
+if sheet:
     try:
-        df_symbols = pd.read_csv(filepath, header=None)
-        formatted_tickers = []
-        for symbol in df_symbols[0].dropna():
-            clean_symbol = str(symbol).strip()
-            if clean_symbol:
-                formatted_tickers.append(f"{clean_symbol}.NS")
-        return formatted_tickers
-    except Exception as e:
-        st.error(f"Error reading CSV: {e}")
-        return []
-
-# --- UI LAYOUT ---
-st.write("Click below to run the EMA/RSI Pullback strategy against the stock list.")
-
-if st.button("🚀 Run Full Scan", type="primary"):
-    stock_list = load_tickers_from_csv()
-    
-    if not stock_list:
-        st.warning("No tickers loaded to scan.")
-        st.stop()
-
-    sheet = get_google_sheet(GOOGLE_SHEET_NAME)
-    if sheet:
-        st.toast("Connected to Google Sheets!", icon="✅")
-    else:
-        st.toast("Could not connect to Google Sheets. Data will only show on screen.", icon="⚠️")
-
-    # Create a visual progress bar and status text
-    progress_bar = st.progress(0)
-    status_text = st.empty()
-    
-    # Store results in two separate lists
-    execution_ready = []
-    no_signal = []
-    
-    total_stocks = len(stock_list)
-
-    for i, ticker in enumerate(stock_list):
-        status_text.text(f"Scanning {ticker}... ({i+1}/{total_stocks})")
-        
-        try:
-            df = fetch_data(ticker, config.PERIOD, config.INTERVAL)
-            df_indicators = calculate_ema_pullback_indicators(df)
+        # Fetch all data from the sheet
+        records = sheet.get_all_records()
+        if records:
+            df_all = pd.DataFrame(records)
             
-            current = df_indicators.iloc[-1]
-            previous = df_indicators.iloc[-2]
+            # Split the data into our two boxes based on the Status column
+            df_passed = df_all[df_all['Status'] == "PASSED"]
+            df_failed = df_all[df_all['Status'] != "PASSED"]
             
-            # Unpack the strategy evaluation
-            is_passed, reason = evaluate_strategy(current, previous)
-            
-            clean_ticker = ticker.replace(".NS", "")
-            current_price = round(current['Close'], 2)
-
-            # --- SORT RESULTS INTO BOXES ---
-            if is_passed:
-                risk_levels = calculate_risk(current)
-                
-                # Format for Streamlit Box 1 (4 Columns)
-                execution_ready.append({
-                    "Ticker": clean_ticker,
-                    "Current Price": current_price,
-                    "Entry Price": round(risk_levels['Entry'], 2),
-                    "Stop Loss": round(risk_levels['SL'], 2)
-                })
-
-                # Push ONLY passed trades to Google Sheets to keep it clean
-                if sheet:
-                    sheet_row = [
-                        clean_ticker, "N/A", current_price,
-                        round(current['EMA_200'], 2), round(current['EMA_50'], 2), round(current['EMA_21'], 2),
-                        round(current['Open'], 2), round(current['Close'], 2), round(current['High'], 2), round(current['Low'], 2),
-                        round(current['RSI_14'], 2), int(current['Volume']),
-                        f"PASSED (Entry: {round(risk_levels['Entry'], 2)}, SL: {round(risk_levels['SL'], 2)})"
-                    ]
-                    append_to_sheet(sheet, sheet_row)
-                    
+            st.markdown("### 🟢 Execution Ready")
+            if not df_passed.empty:
+                # Select only the 4 requested columns
+                display_passed = df_passed[["Ticker", "Current Price", "Entry Price", "Stop Loss"]]
+                st.dataframe(display_passed, use_container_width=True, hide_index=True)
             else:
-                # Format for Streamlit Box 2 (3 Columns)
-                no_signal.append({
-                    "Ticker": clean_ticker,
-                    "Current Price": current_price,
-                    "Status": reason
-                })
+                st.info("No stocks met all criteria for execution.")
 
-        except Exception as e:
-            st.toast(f"Error processing {ticker}: {e}")
-        
-        # Update progress bar
-        progress_bar.progress((i + 1) / total_stocks)
+            st.markdown("---")
+            st.markdown("### 🔴 NO SIGNAL")
+            if not df_failed.empty:
+                # Select only the 3 requested columns
+                display_failed = df_failed[["Ticker", "Current Price", "Status"]]
+                st.dataframe(display_failed, use_container_width=True, hide_index=True)
+            else:
+                st.success("All stocks passed!")
+        else:
+            st.warning("Google Sheet is currently empty. Waiting for the first automated scan.")
+    except Exception as e:
+        st.error(f"Error reading Google Sheet: {e}")
 
-    # --- FINAL OUTPUT UI ---
-    status_text.text("Scan Complete!")
+st.markdown("---")
+
+# --- 2. MANUAL LIVE RUN OVERRIDE ---
+with st.expander("⚙️ Manual Intraday Scan"):
+    st.write("Need an intraday update? Run a live scan below. This will overwrite the Google Sheet.")
     
-    # Box 1: Execution Ready
-    st.subheader("🟢 Execution Ready")
-    if execution_ready:
-        df_ready = pd.DataFrame(execution_ready)
-        # hide_index=True removes the 0, 1, 2, 3 column on the far left
-        st.dataframe(df_ready, use_container_width=True, hide_index=True) 
-    else:
-        st.info("No stocks met all criteria for execution today.")
+    if st.button("🚀 Run Live Scan Now", type="primary"):
+        stock_list = load_tickers_from_csv()
+        if not stock_list:
+            st.stop()
 
-    st.markdown("---") # Visual divider line
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        total_stocks = len(stock_list)
+        
+        all_rows = []
+        headers = ["Ticker", "Current Price", "Status", "Entry Price", "Stop Loss", 
+                   "EMA200", "EMA50", "EMA21", "Open", "Close", "High", "Low", "RSI", "Volume"]
 
-    # Box 2: No Signal
-    st.subheader("🔴 NO SIGNAL")
-    if no_signal:
-        df_no_signal = pd.DataFrame(no_signal)
-        st.dataframe(df_no_signal, use_container_width=True, hide_index=True)
-    else:
-        st.success("Wow! Every stock scanned passed the criteria!")
+        for i, ticker in enumerate(stock_list):
+            status_text.text(f"Scanning {ticker}... ({i+1}/{total_stocks})")
+            try:
+                df = fetch_data(ticker, config.PERIOD, config.INTERVAL)
+                df_indicators = calculate_ema_pullback_indicators(df)
+                
+                current = df_indicators.iloc[-1]
+                previous = df_indicators.iloc[-2]
+                
+                is_passed, reason = evaluate_strategy(current, previous)
+                
+                clean_ticker = ticker.replace(".NS", "")
+                current_price = round(current['Close'], 2)
+                
+                if is_passed:
+                    risk_levels = calculate_risk(current)
+                    all_rows.append([clean_ticker, current_price, "PASSED", round(risk_levels['Entry'], 2), round(risk_levels['SL'], 2), 0,0,0,0,0,0,0,0,0]) # Padded for simplicity in UI override
+                else:
+                    all_rows.append([clean_ticker, current_price, reason, 0, 0, 0,0,0,0,0,0,0,0,0])
+
+            except Exception as e:
+                pass
+            progress_bar.progress((i + 1) / total_stocks)
+
+        # Overwrite sheet with manual run data
+        overwrite_sheet(sheet, headers, all_rows)
+        status_text.text("Live scan complete! Refresh the page to see updated tables.")
+        st.rerun() # Instantly refreshes the page to show the new Google Sheet data
