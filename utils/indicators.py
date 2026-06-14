@@ -19,8 +19,11 @@ def calculate_ema_pullback_indicators(df):
     df_calc['EMA_50'] = ta.trend.EMAIndicator(df_calc['Close'], window=50).ema_indicator()
     df_calc['EMA_21'] = ta.trend.EMAIndicator(df_calc['Close'], window=21).ema_indicator()
     
-    # RSI using the 'ta' library momentum module
+# RSI using the 'ta' library momentum module
     df_calc['RSI_14'] = ta.momentum.RSIIndicator(df_calc['Close'], window=14).rsi()
+    
+    # NEW: Creates a memory of the last 5 days. 1.0 means it dipped below 30 recently.
+    df_calc['RSI_Reset'] = (df_calc['RSI_14'] < 30).rolling(window=5).max()
     
     # Volume MA (Simple Moving Average)
     df_calc['Vol_MA_20'] = df_calc['Volume'].rolling(window=20).mean()
