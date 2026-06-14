@@ -10,7 +10,6 @@ from data.exporter import get_google_sheet, overwrite_sheet
 st.set_page_config(page_title="Technical Screener", page_icon="📈")
 st.title("📈 Technical Strategy Screener")
 
-# Make sure this exactly matches your Google file name
 GOOGLE_SHEET_NAME = "Stock_List" 
 
 def load_tickers_from_csv(filepath="stocks.csv"):
@@ -26,34 +25,42 @@ st.caption("Data is fetched directly from your Stock_List Google Sheet.")
 sheet = get_google_sheet(GOOGLE_SHEET_NAME)
 if sheet:
     try:
-        # Fetch all records from the sheet
         records = sheet.get_all_records()
         if records:
             df_all = pd.DataFrame(records)
             
-            # Split the data into our two boxes
+            # --- SPLIT THE DATA INTO THREE CATEGORIES ---
             df_passed = df_all[df_all['Status'] == "PASSED"]
-            df_failed = df_all[df_all['Status'] != "PASSED"]
+            df_watchlist = df_all[df_all['Status'].str.startswith("WATCHLIST", na=False)]
+            df_failed = df_all[df_all['Status'].str.startswith("FAILED", na=False)]
             
-            # --- FIRST BOX: EXECUTION READY ---
+            # --- BOX 1: EXECUTION READY ---
             st.markdown("### 🟢 Execution Ready")
             if not df_passed.empty:
-                # 4 Columns: Ticker name, Current Price, Entry Price, Stop Loss
-                display_passed = df_passed[["Ticker", "Current Price", "Entry Price", "Stop Loss"]]
+                display_passed = df_passed[["Ticker", "Current Price", "Entry Price", "Stop Loss", "Target 1", "Target 2"]]
                 st.dataframe(display_passed, use_container_width=True, hide_index=True)
             else:
                 st.info("No stocks met all criteria for execution.")
 
             st.markdown("---")
 
-            # --- SECOND BOX: NO SIGNAL ---
+            # --- BOX 2: YOUR WATCHLIST (VALUE POCKET) ---
+            st.markdown("### 🟡 Your Watchlist (In Value Pocket)")
+            if not df_watchlist.empty:
+                display_watchlist = df_watchlist[["Ticker", "Current Price", "Status"]]
+                st.dataframe(display_watchlist, use_container_width=True, hide_index=True)
+            else:
+                st.info("No stocks are currently resting in the value pocket.")
+
+            st.markdown("---")
+
+            # --- BOX 3: NO SIGNAL ---
             st.markdown("### 🔴 NO SIGNAL")
             if not df_failed.empty:
-                # 3 Columns: Ticker name, Current Price, Status (Failure reason)
                 display_failed = df_failed[["Ticker", "Current Price", "Status"]]
                 st.dataframe(display_failed, use_container_width=True, hide_index=True)
             else:
-                st.success("Wow! All stocks passed!")
+                st.success("Wow! No stocks failed the trend filter!")
         else:
             st.warning("Google Sheet is currently empty. Run a manual scan below.")
     except Exception as e:
@@ -77,7 +84,7 @@ with st.expander("⚙️ Manual Intraday Scan"):
         total_stocks = len(stock_list)
         
         all_rows = []
-        headers = ["Ticker", "Current Price", "Status", "Entry Price", "Stop Loss", 
+        headers = ["Ticker", "Current Price", "Status", "Entry Price", "Stop Loss", "Target 1", "Target 2", 
                    "EMA200", "EMA50", "EMA21", "Open", "Close", "High", "Low", "RSI", "Volume"]
 
         for i, ticker in enumerate(stock_list):
@@ -96,16 +103,20 @@ with st.expander("⚙️ Manual Intraday Scan"):
                 
                 if is_passed:
                     risk_levels = calculate_risk(current)
-                    # Note: We pad the rest of the columns with 0s for speed during the intraday scan
-                    all_rows.append([clean_ticker, current_price, "PASSED", round(risk_levels['Entry'], 2), round(risk_levels['SL'], 2), 0,0,0,0,0,0,0,0,0])
+                    all_rows.append([
+                        clean_ticker, current_price, "PASSED", 
+                        round(risk_levels['Entry'], 2), round(risk_levels['SL'], 2), 
+                        round(risk_levels['TP1'], 2), round(risk_levels['TP2'], 2), 
+                        0,0,0,0,0,0,0,0,0
+                    ])
                 else:
-                    all_rows.append([clean_ticker, current_price, reason, 0, 0, 0,0,0,0,0,0,0,0,0])
+                    # Reason will now automatically be "WATCHLIST: ..." or "FAILED: ..."
+                    all_rows.append([clean_ticker, current_price, reason, 0, 0, 0, 0, 0,0,0,0,0,0,0,0,0])
 
             except Exception as e:
                 pass
             progress_bar.progress((i + 1) / total_stocks)
 
-        # Overwrite sheet with manual run data
         overwrite_sheet(sheet, headers, all_rows)
         status_text.text("Live scan complete! Refreshing page...")
-        st.rerun() # Instantly reloads the page to display the newly written data
+        st.rerun()
