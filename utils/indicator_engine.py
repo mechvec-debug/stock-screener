@@ -81,6 +81,21 @@ def add_swing_indicators(df):
             close=df["Close"],
             window=200
         ).ema_indicator()
+# =====================================
+# EMA SLOPE
+# =====================================
+
+df["EMA21_Slope"] = (
+    df["EMA21"]
+    .pct_change(5)
+    * 100
+)
+
+df["EMA50_Slope"] = (
+    df["EMA50"]
+    .pct_change(10)
+    * 100
+)
 
         # =====================================
         # MOMENTUM
@@ -129,7 +144,15 @@ def add_swing_indicators(df):
             .rolling(20)
             .mean()
         )
+# =====================================
+# ATR %
+# =====================================
 
+df["ATRPercent"] = (
+    df["ATR"]
+    /
+    df["Close"]
+) * 100
         # =====================================
         # VOLUME
         # =====================================
@@ -169,6 +192,25 @@ def add_swing_indicators(df):
             .rolling(20)
             .max()
         )
+# =====================================
+# 52 WEEK HIGH
+# =====================================
+
+df["High52W"] = (
+    df["High"]
+    .rolling(252)
+    .max()
+)
+
+df["PctFrom52WHigh"] = (
+    (
+        df["Close"]
+        -
+        df["High52W"]
+    )
+    /
+    df["High52W"]
+) * 100
 
         df["LLV10"] = (
             df["Low"]
@@ -192,6 +234,15 @@ def add_swing_indicators(df):
             .pct_change(20)
             * 100
         )
+# =====================================
+# MOMENTUM SCORE
+# =====================================
+
+df["MomentumScore"] = (
+    df["PriceChange20D"] * 0.6
+    +
+    df["PriceChange5D"] * 0.4
+)
 
         # =====================================
         # TRADED VALUE
@@ -225,15 +276,28 @@ def add_swing_indicators(df):
         # TREND SCORE
         # =====================================
 
-        df["TrendScore"] = np.where(
-            (
-                (df["EMA21"] > df["EMA50"])
-                &
-                (df["EMA50"] > df["EMA200"])
-            ),
-            100,
-            0
-        )
+df["TrendScore"] = 0
+
+df.loc[
+    df["EMA21"] > df["EMA50"],
+    "TrendScore"
+] += 30
+
+df.loc[
+    df["EMA50"] > df["EMA200"],
+    "TrendScore"
+] += 30
+
+df.loc[
+    df["ADX"] > 20,
+    "TrendScore"
+] += 20
+
+df.loc[
+    df["RSI"] > 55,
+    "TrendScore"
+] += 20
+
 
         # =====================================
         # CLEANUP
