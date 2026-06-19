@@ -61,8 +61,6 @@ def get_google_client():
     # Fallback to local JSON file
     return gspread.authorize(Credentials.from_service_account_file("data/google_credentials.json", scopes=scope))
 
-
-
 @st.cache_data(show_spinner=False)
 def get_tickers_from_sheet(cache_key):
     try:
@@ -86,7 +84,7 @@ def fetch_raw_stock_data(ticker, cache_key):
         df = get_price_data(yf_ticker)
 
         if df is None or df.empty or len(df) < 60:
-            df = yf.Ticker(yf_ticker).history(period="1y")
+            df = yf.Ticker(yf_ticker).history(period="2y")
 
         if df is None or df.empty or len(df) < 60:
             return None, None
@@ -103,7 +101,7 @@ def get_benchmark_return(cache_key):
         nifty_df = get_price_data("^NSEI")
 
         if nifty_df is None or nifty_df.empty:
-            nifty_df = yf.Ticker("^NSEI").history(period="1y")
+            nifty_df = yf.Ticker("^NSEI").history(period="2y")
 
         nifty_close = nifty_df["Close"].squeeze()
         if len(nifty_close) > 20:
@@ -176,127 +174,239 @@ with st.spinner("Running calculations..."):
                     pe_ratio = float(info.get("trailingPE") or 0)
 
                     # Only enforce conditions IF data was successfully fetched (market_cap > 0)
-                    if market_cap > 0:
-                        if not (
-                                market_cap > 10000000 and roe > 0.10 and profit_margin > 0.10 and revenue_growth > 0 and debt_to_equity < 1 and pe_ratio < 50):
-                            continue
+     if market_cap > 0:
 
-                    # ==========================================
-                    # --- CRITICAL FIX: SQUEEZE EVERYTHING ---
-                    # ==========================================
-                    close_series = df["Close"].squeeze()
-                    high_series = df["High"].squeeze()
-                    low_series = df["Low"].squeeze()
-                    volume_series = df["Volume"].squeeze()
+    if not (
+        market_cap > 5_000_000_000
+        and roe > 0.12
+        and profit_margin > 0.08
+        and revenue_growth > 0.08
+        and debt_to_equity < 0.50
+        and pe_ratio > 0
+        and pe_ratio < 40
+    ):
+        continue
+        
 
-                    # Price & Indicators
-                    df["50DMA"] = close_series.rolling(50).mean()
-                    df["RSI"] = ta.momentum.RSIIndicator(close=close_series, window=14).rsi()
-                    df["AvgVolume"] = volume_series.rolling(20).mean()
-                    df["BreakoutHigh"] = close_series.rolling(breakout_days).max()
-                    df["DailyRange"] = ((high_series - low_series) / close_series) * 100
+# ==========================================
+# --- CRITICAL FIX: SQUEEZE EVERYTHING ---
+# ==========================================
+close_series = df["Close"].squeeze()
+high_series = df["High"].squeeze()
+low_series = df["Low"].squeeze()
+volume_series = df["Volume"].squeeze()
 
-                    # CRITICAL FIX: Drop NaNs to prevent toxic math conditions later
-                    df_clean = df.dropna(subset=["50DMA", "RSI", "AvgVolume", "BreakoutHigh"])
+# Price & Indicators
+df["50DMA"] = close_series.rolling(50).mean()
+df["200DMA"] = close_series.rolling(200).mean()
+df["RSI"] = ta.momentum.RSIIndicator(close=close_series, window=14).rsi()
+df["AvgVolume"] = volume_series.rolling(20).mean()
+df["BreakoutHigh"] = close_series.rolling(breakout_days).max()
+df["DailyRange"] = ((high_series - low_series) / close_series) * 100
+df["PriceChange20D"] = (
+    close_series.pct_change(20)
+    ) * 100
 
-                    if df_clean.empty or len(df_clean) < 2:
-                        continue
+    df["PriceChange5D"] = (
+    close_series.pct_change(5)
+    ) * 100
 
-                    latest = df_clean.iloc[-1]
+    df["MomentumScore"] = (
+    df["PriceChange20D"] * 0.6
+    +
+    df["PriceChange5D"] * 0.4
+    )
+    df["High52W"] = (
+    high_series
+    .rolling(252)
+    .max()
+    )
 
-                    # Cast to float instead of relying on fragile .item()
-                    close_price = float(latest["Close"])
-                    dma50 = float(latest["50DMA"])
-                    rsi = float(latest["RSI"])
-                    current_volume = float(latest["Volume"])
-                    avg_volume = float(latest["AvgVolume"])
+    df["PctFrom52WHigh"] = (
+    (
+        close_series
+        - df["High52W"]
+    )
+    /
+    df["High52W"]
+    ) * 100
+atr = ta.volatility.AverageTrueRange(
+    high=high_series,
+    low=low_series,
+    close=close_series,
+    window=14
+)
 
-                    # Get breakout level from the day *before* the latest day
-                    breakout_level = float(df_clean["BreakoutHigh"].iloc[-2])
+df["ATR"] = atr.average_true_range()
 
-                    # Calculations
-                    distance_from_dma = ((close_price - dma50) / dma50) * 100
-                    volume_ratio = (current_volume / avg_volume) if avg_volume > 0 else 0
-                    breakout_strength = ((close_price - breakout_level) / breakout_level) * 100
+df["ATRPercent"] = (
+    df["ATR"]
+    /
+    close_series
+) * 100
 
-                    # Trailing Stock Return (Last 20 days on clean DF)
-                    stock_return = ((df_clean["Close"].iloc[-1] - df_clean["Close"].iloc[-20]) / df_clean["Close"].iloc[
-                        -20]) * 100
 
-                    relative_strength = stock_return - nifty_return_val
-                    avg_range = df_clean["DailyRange"].rolling(10).mean().iloc[-1]
 
-                    # Scoring
-                    score = 0
-                    score += min(rsi, 100) * 0.20
-                    score += min(volume_ratio * 20, 100) * 0.25
-                    score += min(max(relative_strength * 5, 0), 100) * 0.30
-                    score += min(distance_from_dma * 5, 100) * 0.25
+    # CRITICAL FIX: Drop NaNs to prevent toxic math conditions later
+  df_clean = df.dropna(subset=["50DMA","200DMA","RSI","AvgVolume","BreakoutHigh", "MomentumScore","PctFrom52WHigh","ATRPercent"]
+     )
 
-                    # Backtesting Metrics (Using the un-dropped 'df' to ensure we have maximum historical depth)
-                    future_return = 0
-                    if len(df) > holding_period:
-                        future_close = float(df["Close"].iloc[-1])
-                        past_close = float(df["Close"].iloc[-(holding_period + 1)])
-                        future_return = ((future_close - past_close) / past_close) * 100
+    if df_clean.empty or len(df_clean) < 2:
+        continue
 
-                    # Adaptive Logic
-                    trend_condition = (close_price > dma50)
+latest = df_clean.iloc[-1]
 
-                    if phase == "BULL":
-                        momentum_condition = (rsi > rsi_value)
-                        volume_condition = (volume_ratio > volume_value)
-                        breakout_condition = (close_price > breakout_level)
-                        relative_strength_condition = (relative_strength > 5)
-                        volatility_condition = (avg_range < 3)
-                    elif phase == "BEAR":
-                        momentum_condition = (rsi > (rsi_value - 10))
-                        volume_condition = (volume_ratio > (volume_value - 0.3))
-                        breakout_condition = (close_price > dma50)
-                        relative_strength_condition = (relative_strength > 0)
-                        volatility_condition = (avg_range < 2)
-                    else:
-                        momentum_condition = (rsi > (rsi_value - 5))
-                        volume_condition = (volume_ratio > (volume_value - 0.2))
-                        breakout_condition = (close_price > breakout_level)
-                        relative_strength_condition = (relative_strength > 2)
-                        volatility_condition = (avg_range < 2.5)
+dma200 = float(latest["200DMA"])
 
-                    # Final Signal
-                    if (trend_condition and momentum_condition and volume_condition and
-                            breakout_condition and relative_strength_condition and volatility_condition):
+momentum_score = float(
+    latest["MomentumScore"]
+)
 
-                        if run_optimization:
-                            optimization_results.append({
-                                "RSI Threshold": rsi_value,
-                                "Volume Threshold": volume_value,
-                                "Stock": stock,
-                                "Score": round(score, 2),
-                                "Future Return": round(future_return, 2)
-                            })
+pct_from_52w_high = float(
+    latest["PctFrom52WHigh"]
+)
 
-                        if rsi_value == rsi_threshold and volume_value == volume_threshold:
-                            results.append({
-                                "Stock": stock,
-                                "Close": round(close_price, 2),
-                                "Breakout Level": round(breakout_level, 2),
-                                "Breakout %": round(breakout_strength, 2),
-                                "RSI": round(rsi, 2),
-                                "% Above 50DMA": round(distance_from_dma, 2),
-                                "Volume Ratio": round(volume_ratio, 2),
-                                "ROE": round(roe * 100, 2),
-                                "Profit Margin": round(profit_margin * 100, 2),
-                                "Revenue Growth": round(revenue_growth * 100, 2),
-                                "Debt/Equity": round(debt_to_equity, 2),
-                                "PE Ratio": round(pe_ratio, 2),
-                                "Relative Strength": round(relative_strength, 2),
-                                "Score": round(score, 2),
-                                "30D Return %": round(future_return, 2),
-                                "Signal": "20D BREAKOUT ✅"
-                            })
-                except Exception as e:
-                    # Print to terminal for debugging instead of failing silently or crashing Streamlit UI
-                    print(f"⚠️ Error calculating {stock}: {e}")
+atr_percent = float(
+    latest["ATRPercent"]
+)
+
+    # Cast to float instead of relying on fragile .item()
+    close_price = float(latest["Close"])
+    dma50 = float(latest["50DMA"])
+    rsi = float(latest["RSI"])
+    current_volume = float(latest["Volume"])
+    avg_volume = float(latest["AvgVolume"])
+
+    # Get breakout level from the day *before* the latest day
+    breakout_level = float(df_clean["BreakoutHigh"].iloc[-2])
+
+    # Calculations
+    distance_from_dma = ((close_price - dma50) / dma50) * 100
+    volume_ratio = (current_volume / avg_volume) if avg_volume > 0 else 0
+    breakout_strength = ((close_price - breakout_level) / breakout_level) * 100
+
+    # Trailing Stock Return (Last 20 days on clean DF)
+    stock_return = ((df_clean["Close"].iloc[-1] - df_clean["Close"].iloc[-20]) / df_clean["Close"].iloc[
+        -20]) * 100
+
+    relative_strength = stock_return - nifty_return_val
+    avg_range = df_clean["DailyRange"].rolling(10).mean().iloc[-1]
+
+    # Scoring
+score = 0
+
+score += min(rsi, 100) * 0.15
+
+score += min(
+    volume_ratio * 20,
+    100
+) * 0.20
+
+score += min(
+    max(relative_strength * 5, 0),
+    100
+) * 0.25
+
+score += min(
+    distance_from_dma * 5,
+    100
+) * 0.15
+
+score += min(
+    max(momentum_score, 0),
+    100
+) * 0.15
+
+score += (
+    100 + pct_from_52w_high
+) * 0.10
+
+
+    # Backtesting Metrics (Using the un-dropped 'df' to ensure we have maximum historical depth)
+    future_return = 0
+    if len(df) > holding_period:
+        future_close = float(df["Close"].iloc[-1])
+        past_close = float(df["Close"].iloc[-(holding_period + 1)])
+        future_return = ((future_close - past_close) / past_close) * 100
+
+    # Adaptive Logic
+   trend_condition = (close_price > dma50
+    and
+    close_price > dma200
+    )
+
+    if phase == "BULL":
+        momentum_condition = (rsi > rsi_value)
+        volume_condition = (volume_ratio > volume_value)
+        breakout_condition = (close_price > breakout_level)
+        relative_strength_condition = (relative_strength > 5)
+        volatility_condition = (avg_range < 3)
+    elif phase == "BEAR":
+        momentum_condition = (rsi > (rsi_value - 10))
+        volume_condition = (volume_ratio > (volume_value - 0.3))
+        breakout_condition = (close_price > dma50)
+        relative_strength_condition = (relative_strength > 0)
+        volatility_condition = (avg_range < 2)
+    else:
+        momentum_condition = (rsi > (rsi_value - 5))
+        volume_condition = (volume_ratio > (volume_value - 0.2))
+        breakout_condition = (close_price > breakout_level)
+        relative_strength_condition = (relative_strength > 2)
+        volatility_condition = (avg_range < 2.5)
+        high_proximity_condition = (
+            pct_from_52w_high > -15
+        )
+        
+        momentum_score_condition = (
+            momentum_score > 5
+        )
+        
+        atr_condition = (
+            atr_percent < 8
+        )
+
+    # Final Signal
+if (
+    trend_condition
+    and momentum_condition
+    and volume_condition
+    and breakout_condition
+    and relative_strength_condition
+    and volatility_condition
+):
+    
+
+        if run_optimization:
+            optimization_results.append({
+                "RSI Threshold": rsi_value,
+                "Volume Threshold": volume_value,
+                "Stock": stock,
+                "Score": round(score, 2),
+                "Future Return": round(future_return, 2)
+            })
+
+        if rsi_value == rsi_threshold and volume_value == volume_threshold:
+            results.append({
+                "Stock": stock,
+                "Close": round(close_price, 2),
+                "Breakout Level": round(breakout_level, 2),
+                "Breakout %": round(breakout_strength, 2),
+                "RSI": round(rsi, 2),
+                "% Above 50DMA": round(distance_from_dma, 2),
+                "Volume Ratio": round(volume_ratio, 2),
+                "ROE": round(roe * 100, 2),
+                "Profit Margin": round(profit_margin * 100, 2),
+                "Revenue Growth": round(revenue_growth * 100, 2),
+                "Debt/Equity": round(debt_to_equity, 2),
+                "PE Ratio": round(pe_ratio, 2),
+                "Relative Strength": round(relative_strength, 2),
+                "Score": round(score, 2),
+                "30D Return %": round(future_return, 2),
+                "Signal": "20D BREAKOUT ✅"
+            })
+except Exception as e:
+    # Print to terminal for debugging instead of failing silently or crashing Streamlit UI
+    print(f"⚠️ Error calculating {stock}: {e}")
 
 # =========================
 # DISPLAY RESULTS
