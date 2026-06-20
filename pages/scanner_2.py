@@ -176,15 +176,15 @@ with st.spinner("Running calculations..."):
                     # Only enforce conditions IF data was successfully fetched (market_cap > 0)
      if market_cap > 0:
 
-    if not (
-        market_cap > 5_000_000_000
-        and roe > 0.12
-        and profit_margin > 0.08
-        and revenue_growth > 0.08
-        and debt_to_equity < 0.50
-        and pe_ratio > 0
-        and pe_ratio < 40
-    ):
+        if not (
+            market_cap > 5_000_000_000
+            and roe > 0.12
+            and profit_margin > 0.08
+            and revenue_growth > 0.08
+            and debt_to_equity < 0.50
+            and pe_ratio > 0
+            and pe_ratio < 40
+        ):
         continue
         
 
