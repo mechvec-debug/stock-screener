@@ -9,7 +9,6 @@ import yfinance as yf
 import gspread
 import datetime
 import pytz
-from google.oauth2.service_account import Credentials
 
 from utils.data_fetcher import get_price_data
 from utils.market_phase import get_market_phase
@@ -42,22 +41,10 @@ st.write(f"Data locked for trading day: {current_market_key}")
 # GOOGLE SHEETS CONNECTION
 # =========================================
 def get_google_client():
-    """
-    Smart auth:
-    - Safely tries Streamlit Secrets on cloud
-    - Falls back to local JSON file on desktop
-    """
-    scope = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
-
-    try:
-        if "gcp_service_account" in st.secrets:
-            creds_dict = dict(st.secrets["gcp_service_account"])
-            return gspread.authorize(Credentials.from_service_account_info(creds_dict, scopes=scope))
-    except FileNotFoundError:
-        pass  # No secrets.toml found, move on to the local fallback
-
-    return gspread.authorize(Credentials.from_service_account_file("data/google_credentials.json", scopes=scope))
-
+    if "gcp_service_account" in st.secrets:
+        return gspread.service_account_from_dict(dict(st.secrets["gcp_service_account"]))
+    else:
+        return gspread.service_account(filename="data/google_credentials.json")
 
 @st.cache_data(show_spinner=False)
 def get_tickers_from_sheet(cache_key):
@@ -71,7 +58,6 @@ def get_tickers_from_sheet(cache_key):
         st.error(f"❌ Failed to read Google Sheet: {e}")
         return []
 
-
 # =========================
 # SMART CACHING ENGINE
 # =========================
@@ -82,7 +68,7 @@ def fetch_raw_stock_data(ticker, cache_key):
         df = get_price_data(yf_ticker)
 
         if df is None or df.empty or len(df) < 60:
-            df = yf.Ticker(yf_ticker).history(period="2y")
+            df = yf.Ticker(yf_ticker).history(period="1y")
 
         if df is None or df.empty or len(df) < 60:
             return None, None
@@ -99,7 +85,7 @@ def get_benchmark_return(cache_key):
         nifty_df = get_price_data("^NSEI")
 
         if nifty_df is None or nifty_df.empty:
-            nifty_df = yf.Ticker("^NSEI").history(period="2y")
+            nifty_df = yf.Ticker("^NSEI").history(period="1y")
 
         nifty_close = nifty_df["Close"].squeeze()
         if len(nifty_close) > 20:
@@ -114,17 +100,6 @@ def get_benchmark_return(cache_key):
 # SIDEBAR CONTROLS
 # =========================
 st.sidebar.header("⚙️ Scanner Settings")
-
-# ADD THIS OVERRIDE
-phase_override = st.sidebar.selectbox("Market Phase Override", ["Auto", "Force BULL", "Force BEAR", "Force SIDEWAYS"])
-
-if phase_override != "Auto":
-    phase = phase_override.replace("Force ", "")
-else:
-    phase = get_market_phase()  # Your original function
-
-st.title("📊 Scanner 2 - 20-Day Breakout")
-st.subheader(f"Current Market Phase: {phase}")
 
 rsi_threshold = st.sidebar.slider("RSI Threshold", min_value=40, max_value=80, value=55)
 volume_threshold = st.sidebar.slider("Volume Ratio Threshold", min_value=1.0, max_value=3.0, value=1.5, step=0.1)
@@ -167,207 +142,133 @@ with st.spinner("Loading End-of-Day market data..."):
 # STOCK SCAN LOOP
 # =========================
 with st.spinner("Running calculations..."):
-    # LEVEL 1: Iterate through stocks
-    for stock, data in cached_market_data.items():
-        try:  # LEVEL 2: Error handling per stock
-            df = data["df"].copy()
-            info = data["info"]
+    for rsi_value in rsi_test_values:
+        for volume_value in volume_test_values:
+            for stock, data in cached_market_data.items():
+                try:
+                    df = data["df"].copy()
+                    info = data["info"]
 
-            market_cap = float(info.get("marketCap") or 0)
+                    # Fundamentals with graceful fallback. 
+                    # If Yahoo fails to fetch, we don't drop the stock purely due to missing data.
+                    market_cap = float(info.get("marketCap") or 0)
+                    roe = float(info.get("returnOnEquity") or 0)
+                    profit_margin = float(info.get("profitMargins") or 0)
+                    revenue_growth = float(info.get("revenueGrowth") or 0)
+                    debt_to_equity = float(info.get("debtToEquity") or 0)
+                    pe_ratio = float(info.get("trailingPE") or 0)
 
-            # LEVEL 3: Fundamental Checks
-            if market_cap > 0:
-                # LEVEL 4: Strict conditions
-                if not (
-                        market_cap > 5_000_000_000 and
-                        # ... other conditions ...
-                            0 < pe_ratio < 40
-                ):
-                    continue  # This must be inside the if block
+                    # Only enforce conditions IF data was successfully fetched (market_cap > 0)
+                    if market_cap > 0:
+                        if not (market_cap > 10000000 and roe > 0.10 and profit_margin > 0.10 and revenue_growth > 0 and debt_to_equity < 1 and pe_ratio < 50):
+                            continue
 
-            # [Indicator math here at LEVEL 2]
+                    # Price & Indicators
+                    df["50DMA"] = df["Close"].rolling(50).mean()
+                    df["RSI"] = ta.momentum.RSIIndicator(close=df["Close"], window=14).rsi()
+                    df["AvgVolume"] = df["Volume"].rolling(20).mean()
+                    df["BreakoutHigh"] = df["Close"].rolling(breakout_days).max()
+                    df["DailyRange"] = ((df["High"] - df["Low"]) / df["Close"]) * 100
 
-            # LEVEL 2: Parameter Optimization Loop
-            for rsi_value in rsi_test_values:
-                for volume_value in volume_test_values:  # LEVEL 3
+                    # CRITICAL FIX: Drop NaNs to prevent toxic math conditions later
+                    df_clean = df.dropna(subset=["50DMA", "RSI", "AvgVolume", "BreakoutHigh"])
+                    
+                    if df_clean.empty or len(df_clean) < 2:
+                        continue
 
-                    if phase == "BULL":  # LEVEL 4
-                        trend_condition = (close_price > dma50)
-                        # ...
+                    latest = df_clean.iloc[-1]
+                    
+                    # CRITICAL FIX: Cast to float instead of relying on fragile .item()
+                    close_price = float(latest["Close"])
+                    dma50 = float(latest["50DMA"])
+                    rsi = float(latest["RSI"])
+                    current_volume = float(latest["Volume"])
+                    avg_volume = float(latest["AvgVolume"])
+                    
+                    # Get breakout level from the day *before* the latest day
+                    breakout_level = float(df_clean["BreakoutHigh"].iloc[-2])
 
-                    # LEVEL 4: Final Signal Check
-                    if (trend_condition and momentum_condition):
-                        # LEVEL 5: Append to lists
+                    # Calculations
+                    distance_from_dma = ((close_price - dma50) / dma50) * 100
+                    volume_ratio = (current_volume / avg_volume) if avg_volume > 0 else 0
+                    breakout_strength = ((close_price - breakout_level) / breakout_level) * 100
+
+                    # Trailing Stock Return (Last 20 days on clean DF)
+                    stock_return = ((df_clean["Close"].iloc[-1] - df_clean["Close"].iloc[-20]) / df_clean["Close"].iloc[-20]) * 100
+                    relative_strength = stock_return - nifty_return_val
+                    avg_range = df_clean["DailyRange"].rolling(10).mean().iloc[-1]
+
+                    # Scoring
+                    score = 0
+                    score += min(rsi, 100) * 0.20
+                    score += min(volume_ratio * 20, 100) * 0.25
+                    score += min(max(relative_strength * 5, 0), 100) * 0.30
+                    score += min(distance_from_dma * 5, 100) * 0.25
+
+                    # Backtesting Metrics (Using the un-dropped 'df' to ensure we have maximum historical depth)
+                    future_return = 0
+                    if len(df) > holding_period:
+                        future_close = float(df["Close"].iloc[-1])
+                        past_close = float(df["Close"].iloc[-(holding_period + 1)])
+                        future_return = ((future_close - past_close) / past_close) * 100
+
+                    # Adaptive Logic
+                    trend_condition = (close_price > dma50)
+
+                    if phase == "BULL":
+                        momentum_condition = (rsi > rsi_value)
+                        volume_condition = (volume_ratio > volume_value)
+                        breakout_condition = (close_price > breakout_level)
+                        relative_strength_condition = (relative_strength > 5)
+                        volatility_condition = (avg_range < 3)
+                    elif phase == "BEAR":
+                        momentum_condition = (rsi > (rsi_value - 10))
+                        volume_condition = (volume_ratio > (volume_value - 0.3))
+                        breakout_condition = (close_price > dma50)
+                        relative_strength_condition = (relative_strength > 0)
+                        volatility_condition = (avg_range < 2)
+                    else:
+                        momentum_condition = (rsi > (rsi_value - 5))
+                        volume_condition = (volume_ratio > (volume_value - 0.2))
+                        breakout_condition = (close_price > breakout_level)
+                        relative_strength_condition = (relative_strength > 2)
+                        volatility_condition = (avg_range < 2.5)
+
+                    # Final Signal
+                    if (trend_condition and momentum_condition and volume_condition and
+                            breakout_condition and relative_strength_condition and volatility_condition):
+
                         if run_optimization:
-                            optimization_results.append(...)
+                            optimization_results.append({
+                                "RSI Threshold": rsi_value,
+                                "Volume Threshold": volume_value,
+                                "Stock": stock,
+                                "Score": round(score, 2),
+                                "Future Return": round(future_return, 2)
+                            })
 
-        except Exception as e:  # LEVEL 2: Matches the try block
-            print(f"⚠️ Error calculating {stock}: {e}")
-
-        else:
-            # If no market cap data is fetched, you may choose to skip or continue.
-            # Preserving your original logic: only restrict if market_cap > 0
-            pass
-
-        # ==========================================
-        # INDICATOR CALCULATIONS
-        # ==========================================
-        close_series = df["Close"].squeeze()
-        high_series = df["High"].squeeze()
-        low_series = df["Low"].squeeze()
-        volume_series = df["Volume"].squeeze()
-
-        df["50DMA"] = close_series.rolling(50).mean()
-        df["200DMA"] = close_series.rolling(200).mean()
-        df["RSI"] = ta.momentum.RSIIndicator(close=close_series, window=14).rsi()
-        df["AvgVolume"] = volume_series.rolling(20).mean()
-        df["BreakoutHigh"] = close_series.rolling(breakout_days).max()
-        df["DailyRange"] = ((high_series - low_series) / close_series) * 100
-        df["PriceChange20D"] = close_series.pct_change(20) * 100
-        df["PriceChange5D"] = close_series.pct_change(5) * 100
-        df["MomentumScore"] = (df["PriceChange20D"] * 0.6) + (df["PriceChange5D"] * 0.4)
-        df["High52W"] = high_series.rolling(252).max()
-        df["PctFrom52WHigh"] = ((close_series - df["High52W"]) / df["High52W"]) * 100
-
-        atr = ta.volatility.AverageTrueRange(high=high_series, low=low_series, close=close_series, window=14)
-        df["ATR"] = atr.average_true_range()
-        df["ATRPercent"] = (df["ATR"] / close_series) * 100
-
-        # Drop NaNs to prevent toxic math conditions later
-        cols_to_check = ["50DMA", "200DMA", "RSI", "AvgVolume", "BreakoutHigh", "MomentumScore", "PctFrom52WHigh",
-                         "ATRPercent"]
-        df_clean = df.dropna(subset=cols_to_check)
-
-        if df_clean.empty or len(df_clean) < 2:
-            continue
-
-        # Extract latest values safely
-        latest = df_clean.iloc[-1]
-        close_price = float(latest["Close"])
-        dma50 = float(latest["50DMA"])
-        dma200 = float(latest["200DMA"])
-        rsi = float(latest["RSI"])
-        current_volume = float(latest["Volume"])
-        avg_volume = float(latest["AvgVolume"])
-        momentum_score = float(latest["MomentumScore"])
-        pct_from_52w_high = float(latest["PctFrom52WHigh"])
-        atr_percent = float(latest["ATRPercent"])
-
-        # Get breakout level from the day *before* the latest day
-        breakout_level = float(df_clean["BreakoutHigh"].iloc[-2])
-
-        # Core Calculations
-        distance_from_dma = ((close_price - dma50) / dma50) * 100
-        volume_ratio = (current_volume / avg_volume) if avg_volume > 0 else 0
-        breakout_strength = ((close_price - breakout_level) / breakout_level) * 100
-
-        # Trailing Stock Return (Last 20 days on clean DF)
-        stock_return = ((df_clean["Close"].iloc[-1] - df_clean["Close"].iloc[-20]) / df_clean["Close"].iloc[-20]) * 100
-        relative_strength = stock_return - nifty_return_val
-        avg_range = float(df_clean["DailyRange"].rolling(10).mean().iloc[-1])
-
-        # Scoring Algorithm
-        score = 0
-        score += min(rsi, 100) * 0.15
-        score += min(volume_ratio * 20, 100) * 0.20
-        score += min(max(relative_strength * 5, 0), 100) * 0.25
-        score += min(distance_from_dma * 5, 100) * 0.15
-        score += min(max(momentum_score, 0), 100) * 0.15
-        score += (100 + pct_from_52w_high) * 0.10
-
-        # Backtesting Metrics
-        future_return = 0
-        if len(df) > holding_period:
-            future_close = float(df["Close"].iloc[-1])
-            past_close = float(df["Close"].iloc[-(holding_period + 1)])
-            future_return = ((future_close - past_close) / past_close) * 100
-
-        # Base conditions
-        trend_condition = (close_price > dma50 and close_price > dma200)
-
-        # ==========================================
-        # PARAMETER OPTIMIZATION LOOP
-        # ==========================================
-        # We run the optimization loop here so we don't recalculate the DF indicators above repeatedly
-        for rsi_value in rsi_test_values:
-            for volume_value in volume_test_values:
-                # Phase-specific Logic
-                extra_conditions = True  # Used to group sideways market conditions cleanly
-
-            # Remove the hardcoded base condition and make it adaptive
-
-        # Phase-specific Logic
-        if phase == "BULL":
-            # Strict trend for a confirmed bull market
-            trend_condition = (close_price > dma50 and close_price > dma200)
-            momentum_condition = (rsi > rsi_value)
-            volume_condition = (volume_ratio > volume_value)
-            breakout_condition = (close_price > breakout_level)
-            relative_strength_condition = (relative_strength > 5)
-            volatility_condition = (avg_range < 3)
-            extra_conditions = True
-
-        elif phase == "BEAR":
-            # Relaxed trend for a bear market rally (ignore 200 DMA)
-            trend_condition = (close_price > dma50)
-            momentum_condition = (rsi > (rsi_value - 10))
-            volume_condition = (volume_ratio > (volume_value - 0.3))
-            breakout_condition = (close_price > dma50)
-            relative_strength_condition = (relative_strength > 0)
-            volatility_condition = (avg_range < 2)
-            extra_conditions = True
-
-        else:  # SIDEWAYS
-            trend_condition = (close_price > dma50)
-            momentum_condition = (rsi > (rsi_value - 5))
-            volume_condition = (volume_ratio > (volume_value - 0.2))
-            breakout_condition = (close_price > breakout_level)
-            relative_strength_condition = (relative_strength > 2)
-            volatility_condition = (avg_range < 2.5)
-            extra_conditions = (pct_from_52w_high > -15 and momentum_score > 5 and atr_percent < 8)
-            # Final Signal Evaluation
-            if (
-                    trend_condition and
-                    momentum_condition and
-                    volume_condition and
-                    breakout_condition and
-                    relative_strength_condition and
-                    volatility_condition and
-                    extra_conditions
-            ):
-                if run_optimization:
-                    optimization_results.append({
-                        "RSI Threshold": rsi_value,
-                        "Volume Threshold": volume_value,
-                        "Stock": stock,
-                        "Score": round(score, 2),
-                        "Future Return": round(future_return, 2)
-                    })
-
-                # Ensure we only append to the main dashboard results once if it matches the current UI settings
-                if rsi_value == rsi_threshold and volume_value == volume_threshold:
-                    results.append({
-                        "Stock": stock,
-                        "Close": round(close_price, 2),
-                        "Breakout Level": round(breakout_level, 2),
-                        "Breakout %": round(breakout_strength, 2),
-                        "RSI": round(rsi, 2),
-                        "% Above 50DMA": round(distance_from_dma, 2),
-                        "Volume Ratio": round(volume_ratio, 2),
-                        "ROE": round(roe * 100, 2),
-                        "Profit Margin": round(profit_margin * 100, 2),
-                        "Revenue Growth": round(revenue_growth * 100, 2),
-                        "Debt/Equity": round(debt_to_equity, 2),
-                        "PE Ratio": round(pe_ratio, 2),
-                        "Relative Strength": round(relative_strength, 2),
-                        "Score": round(score, 2),
-                        "30D Return %": round(future_return, 2),
-                        "Signal": "20D BREAKOUT ✅"
-                    })
-            # Notice how this except block is aligned all the way back out
-            # to match the 'try:' statement at the beginning of the stock loop.
-    except Exception as e:
-    print(f"⚠️ Error calculating {stock}: {e}")
+                        if rsi_value == rsi_threshold and volume_value == volume_threshold:
+                            results.append({
+                                "Stock": stock,
+                                "Close": round(close_price, 2),
+                                "Breakout Level": round(breakout_level, 2),
+                                "Breakout %": round(breakout_strength, 2),
+                                "RSI": round(rsi, 2),
+                                "% Above 50DMA": round(distance_from_dma, 2),
+                                "Volume Ratio": round(volume_ratio, 2),
+                                "ROE": round(roe * 100, 2),
+                                "Profit Margin": round(profit_margin * 100, 2),
+                                "Revenue Growth": round(revenue_growth * 100, 2),
+                                "Debt/Equity": round(debt_to_equity, 2),
+                                "PE Ratio": round(pe_ratio, 2),
+                                "Relative Strength": round(relative_strength, 2),
+                                "Score": round(score, 2),
+                                "30D Return %": round(future_return, 2),
+                                "Signal": "20D BREAKOUT ✅"
+                            })
+                except Exception as e:
+                    # Print to terminal for debugging instead of failing silently or crashing Streamlit UI
+                    print(f"⚠️ Error calculating {stock}: {e}")
 
 # =========================
 # DISPLAY RESULTS
@@ -379,21 +280,6 @@ if results_df.empty:
 else:
     results_df = results_df.sort_values(by="Score", ascending=False)
     st.dataframe(results_df, width="stretch")
-
-
-    @st.cache_data
-    def convert_df(df):
-        return df.to_csv(index=False).encode('utf-8')
-
-
-    csv_data = convert_df(results_df)
-
-    st.download_button(
-        label="📥 Download Validated Results (CSV)",
-        data=csv_data,
-        file_name=f"scanner_2_results_{current_market_key}.csv",
-        mime="text/csv",
-    )
 
     st.subheader("📈 Backtest Summary")
 
@@ -427,13 +313,5 @@ if run_optimization:
         optimization_summary.columns = ["RSI", "Volume", "Avg Score", "Avg Return", "Signals Found"]
         optimization_summary = optimization_summary.sort_values(by="Avg Return", ascending=False)
         st.dataframe(optimization_summary, width="stretch")
-
-        opt_csv = convert_df(optimization_summary)
-        st.download_button(
-            label="📥 Download Optimization Summary",
-            data=opt_csv,
-            file_name=f"optimization_results_{current_market_key}.csv",
-            mime="text/csv",
-        )
     else:
         st.warning("No optimization results yielded any signals.")
