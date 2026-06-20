@@ -113,6 +113,21 @@ def get_benchmark_return(cache_key):
 # SIDEBAR CONTROLS
 # =========================
 st.sidebar.header("⚙️ Scanner Settings")
+# =========================
+# SIDEBAR CONTROLS
+# =========================
+st.sidebar.header("⚙️ Scanner Settings")
+
+# ADD THIS OVERRIDE
+phase_override = st.sidebar.selectbox("Market Phase Override", ["Auto", "Force BULL", "Force BEAR", "Force SIDEWAYS"])
+
+if phase_override != "Auto":
+    phase = phase_override.replace("Force ", "")
+else:
+    phase = get_market_phase() # Your original function
+
+st.title("📊 Scanner 2 - 20-Day Breakout")
+st.subheader(f"Current Market Phase: {phase}")
 
 rsi_threshold = st.sidebar.slider("RSI Threshold", min_value=40, max_value=80, value=55)
 volume_threshold = st.sidebar.slider("Volume Ratio Threshold", min_value=1.0, max_value=3.0, value=1.5, step=0.1)
@@ -270,30 +285,38 @@ with st.spinner("Running calculations..."):
                     # Phase-specific Logic
                     extra_conditions = True  # Used to group sideways market conditions cleanly
 
-                    if phase == "BULL":
-                        momentum_condition = (rsi > rsi_value)
-                        volume_condition = (volume_ratio > volume_value)
-                        breakout_condition = (close_price > breakout_level)
-                        relative_strength_condition = (relative_strength > 5)
-                        volatility_condition = (avg_range < 3)
-                    elif phase == "BEAR":
-                        momentum_condition = (rsi > (rsi_value - 10))
-                        volume_condition = (volume_ratio > (volume_value - 0.3))
-                        breakout_condition = (close_price > dma50)
-                        relative_strength_condition = (relative_strength > 0)
-                        volatility_condition = (avg_range < 2)
-                    else:
-                        momentum_condition = (rsi > (rsi_value - 5))
-                        volume_condition = (volume_ratio > (volume_value - 0.2))
-                        breakout_condition = (close_price > breakout_level)
-                        relative_strength_condition = (relative_strength > 2)
-                        volatility_condition = (avg_range < 2.5)
-                        # Fix: Ensure previously unused variables are actively evaluated
-                        extra_conditions = (
-                            pct_from_52w_high > -15 and 
-                            momentum_score > 5 and 
-                            atr_percent < 8
-                        )
+                  # Remove the hardcoded base condition and make it adaptive
+            
+            # Phase-specific Logic
+            if phase == "BULL":
+                # Strict trend for a confirmed bull market
+                trend_condition = (close_price > dma50 and close_price > dma200) 
+                momentum_condition = (rsi > rsi_value)
+                volume_condition = (volume_ratio > volume_value)
+                breakout_condition = (close_price > breakout_level)
+                relative_strength_condition = (relative_strength > 5)
+                volatility_condition = (avg_range < 3)
+                extra_conditions = True
+                
+            elif phase == "BEAR":
+                # Relaxed trend for a bear market rally (ignore 200 DMA)
+                trend_condition = (close_price > dma50) 
+                momentum_condition = (rsi > (rsi_value - 10))
+                volume_condition = (volume_ratio > (volume_value - 0.3))
+                breakout_condition = (close_price > dma50)
+                relative_strength_condition = (relative_strength > 0)
+                volatility_condition = (avg_range < 2)
+                extra_conditions = True
+                
+            else: # SIDEWAYS
+                trend_condition = (close_price > dma50)
+                momentum_condition = (rsi > (rsi_value - 5))
+                volume_condition = (volume_ratio > (volume_value - 0.2))
+                breakout_condition = (close_price > breakout_level)
+                relative_strength_condition = (relative_strength > 2)
+                volatility_condition = (avg_range < 2.5)
+                extra_conditions = (pct_from_52w_high > -15 and momentum_score > 5 and atr_percent < 8)
+                
 
                     # Final Signal Evaluation
                     if (
