@@ -113,10 +113,6 @@ def get_benchmark_return(cache_key):
 # SIDEBAR CONTROLS
 # =========================
 st.sidebar.header("⚙️ Scanner Settings")
-# =========================
-# SIDEBAR CONTROLS
-# =========================
-st.sidebar.header("⚙️ Scanner Settings")
 
 # ADD THIS OVERRIDE
 phase_override = st.sidebar.selectbox("Market Phase Override", ["Auto", "Force BULL", "Force BEAR", "Force SIDEWAYS"])
@@ -170,31 +166,43 @@ with st.spinner("Loading End-of-Day market data..."):
 # STOCK SCAN LOOP
 # =========================
 with st.spinner("Running calculations..."):
-    # Iterate through stocks first to calculate indicators ONCE per stock
+    # LEVEL 1: Iterate through stocks
     for stock, data in cached_market_data.items():
-        try:
+        try: # LEVEL 2: Error handling per stock
             df = data["df"].copy()
             info = data["info"]
 
-            # Fundamentals with graceful fallback
             market_cap = float(info.get("marketCap") or 0)
-            roe = float(info.get("returnOnEquity") or 0)
-            profit_margin = float(info.get("profitMargins") or 0)
-            revenue_growth = float(info.get("revenueGrowth") or 0)
-            debt_to_equity = float(info.get("debtToEquity") or 0)
-            pe_ratio = float(info.get("trailingPE") or 0)
-
-            # Enforce fundamental conditions
+            
+            # LEVEL 3: Fundamental Checks
             if market_cap > 0:
+                # LEVEL 4: Strict conditions
                 if not (
                     market_cap > 5_000_000_000 and
-                    roe > 0.12 and
-                    profit_margin > 0.08 and
-                    revenue_growth > 0.08 and
-                    debt_to_equity < 0.50 and
+                    # ... other conditions ...
                     0 < pe_ratio < 40
                 ):
-                    continue
+                    continue # This must be inside the if block
+
+            # [Indicator math here at LEVEL 2]
+
+            # LEVEL 2: Parameter Optimization Loop
+            for rsi_value in rsi_test_values:
+                for volume_value in volume_test_values: # LEVEL 3
+                    
+                    if phase == "BULL": # LEVEL 4
+                        trend_condition = (close_price > dma50)
+                        # ...
+                        
+                    # LEVEL 4: Final Signal Check
+                    if (trend_condition and momentum_condition):
+                        # LEVEL 5: Append to lists
+                        if run_optimization:
+                            optimization_results.append(...)
+                            
+        except Exception as e: # LEVEL 2: Matches the try block
+            print(f"⚠️ Error calculating {stock}: {e}")
+            
             else:
                 # If no market cap data is fetched, you may choose to skip or continue. 
                 # Preserving your original logic: only restrict if market_cap > 0
