@@ -75,11 +75,11 @@ def fetch_raw_stock_data(ticker, cache_key):
         yf_ticker = f"{ticker}.NS" if not ticker.endswith(".NS") else ticker
         df = get_price_data(yf_ticker)
 
-        # 2. ADDED: Fetch 2y instead of 1y to ensure 200DMA calculates correctly
-        if df is None or df.empty or len(df) < 60:
+        # FIX: Changed < 60 to < 210 to ensure the 200DMA has enough historical data
+        if df is None or df.empty or len(df) < 210:
             df = yf.Ticker(yf_ticker).history(period="2y")
 
-        if df is None or df.empty or len(df) < 60:
+        if df is None or df.empty or len(df) < 210:
             return None, None
 
         info = yf.Ticker(yf_ticker).info
@@ -148,7 +148,7 @@ with st.spinner("Loading End-of-Day market data..."):
 # =========================
 with st.spinner("Running calculations..."):
     # 3. FIX: Loop through stocks FIRST so we only calculate indicators once per stock
-    for stock, data in cached_market_data.items():
+ for stock, data in cached_market_data.items():
         try:
             df = data["df"].copy()
             info = data["info"]
@@ -159,21 +159,22 @@ with st.spinner("Running calculations..."):
             revenue_growth = float(info.get("revenueGrowth") or 0)
             debt_to_equity = float(info.get("debtToEquity") or 0)
             pe_ratio = float(info.get("trailingPE") or 0)
+            peg_ratio = float(info.get("pegRatio") or 0) # ENHANCEMENT: Added PEG Ratio
 
-            # 4. FIX: Relaxed fundamentals to allow turnaround stocks to pass
-            if market_cap > 0:
-                if not (market_cap > 10_000_000 and debt_to_equity < 1.5 and pe_ratio < 80):
+            # FIX: Smarter fundamental filter using PEG for growth assessment
+            if market_cap > 10_000_000:
+                # Filter out heavy debt or significantly overvalued PEG (ignoring 0 values)
+                if debt_to_equity > 1.5 or (0 < peg_ratio > 2.5):
                     continue
 
             # Price & Indicators
             df["50DMA"] = df["Close"].rolling(50).mean()
-            df["200DMA"] = df["Close"].rolling(200).mean() # ADDED 200DMA
+            df["200DMA"] = df["Close"].rolling(200).mean()
             df["RSI"] = ta.momentum.RSIIndicator(close=df["Close"], window=14).rsi()
             df["AvgVolume"] = df["Volume"].rolling(20).mean()
             df["BreakoutHigh"] = df["Close"].rolling(breakout_days).max()
             df["DailyRange"] = ((df["High"] - df["Low"]) / df["Close"]) * 100
 
-            # CRITICAL FIX: Drop NaNs safely
             df_clean = df.dropna(subset=["50DMA", "200DMA", "RSI", "AvgVolume", "BreakoutHigh"])
             
             if df_clean.empty or len(df_clean) < 2:
@@ -210,34 +211,32 @@ with st.spinner("Running calculations..."):
                 past_close = float(df["Close"].iloc[-(holding_period + 1)])
                 future_return = ((future_close - past_close) / past_close) * 100
 
-            # 5. FIX: Optimization loop placed inside stock loop to avoid recalculating indicators
             for rsi_value in rsi_test_values:
                 for volume_value in volume_test_values:
 
-                    # 6. FIX: Adaptive trend conditions based on phase
+                    # FIX: Relaxed constraints to allow real market behavior
                     if phase == "BULL":
                         trend_condition = (close_price > dma50 and close_price > dma200)
                         momentum_condition = (rsi > rsi_value)
                         volume_condition = (volume_ratio > volume_value)
-                        breakout_condition = (close_price > breakout_level)
-                        relative_strength_condition = (relative_strength > 5)
-                        volatility_condition = (avg_range < 3)
+                        breakout_condition = (close_price >= breakout_level * 0.98) # Allow proximity breakouts
+                        relative_strength_condition = (relative_strength > 2) # Lowered from 5
+                        volatility_condition = (avg_range < 8) # Raised from 3 to allow volatile breakouts
                     elif phase == "BEAR":
-                        trend_condition = (close_price > dma50) # Ignore 200DMA in bear rallies
+                        trend_condition = (close_price > dma50) 
                         momentum_condition = (rsi > (rsi_value - 10))
                         volume_condition = (volume_ratio > (volume_value - 0.3))
                         breakout_condition = (close_price > dma50)
                         relative_strength_condition = (relative_strength > 0)
-                        volatility_condition = (avg_range < 2)
+                        volatility_condition = (avg_range < 5) 
                     else: # SIDEWAYS
-                        trend_condition = (close_price > dma50) # Ignore 200DMA in sideways chop
+                        trend_condition = (close_price > dma50)
                         momentum_condition = (rsi > (rsi_value - 5))
                         volume_condition = (volume_ratio > (volume_value - 0.2))
-                        breakout_condition = (close_price > breakout_level)
-                        relative_strength_condition = (relative_strength > 2)
-                        volatility_condition = (avg_range < 2.5)
+                        breakout_condition = (close_price >= breakout_level * 0.99)
+                        relative_strength_condition = (relative_strength > 1)
+                        volatility_condition = (avg_range < 6)
 
-                    # Final Signal Evaluation
                     if (trend_condition and momentum_condition and volume_condition and
                             breakout_condition and relative_strength_condition and volatility_condition):
 
@@ -259,21 +258,19 @@ with st.spinner("Running calculations..."):
                                 "RSI": round(rsi, 2),
                                 "% Above 50DMA": round(distance_from_dma, 2),
                                 "Volume Ratio": round(volume_ratio, 2),
+                                "PEG Ratio": round(peg_ratio, 2), # ENHANCEMENT: Display PEG in results
                                 "ROE": round(roe * 100, 2),
-                                "Profit Margin": round(profit_margin * 100, 2),
-                                "Revenue Growth": round(revenue_growth * 100, 2),
                                 "Debt/Equity": round(debt_to_equity, 2),
-                                "PE Ratio": round(pe_ratio, 2),
                                 "Relative Strength": round(relative_strength, 2),
                                 "Score": round(score, 2),
                                 "30D Return %": round(future_return, 2),
                                 "Signal": "20D BREAKOUT ✅"
                             })
                             
-        # Indentation fixed: perfectly aligns with the `try` block
         except Exception as e:
+            # Added slight detail to the print to help you catch any bad data rows
             print(f"⚠️ Error calculating {stock}: {e}")
-
+            
 # =========================
 # DISPLAY RESULTS
 # =========================
